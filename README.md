@@ -107,11 +107,16 @@ gradle :app:assembleDebug
 gradle :app:testDebugUnitTest
 ```
 
-### 4. Automated APK Builds with GitHub Actions
-This repository includes a ready-to-use GitHub Actions workflow at [`.github/workflows/android-build.yml`](./.github/workflows/android-build.yml) that automatically:
-1. Checks out the repository with **Git LFS** enabled.
-2. Runs the unit and Robolectric test suite.
-3. Builds the debug APK (`app-debug.apk`) and uploads it as a downloadable artifact on every push and pull request.
+### 4. Auto-Generated APK & Changelog on GitHub Releases
+This repository is pre-configured with [`.github/workflows/android-build.yml`](./.github/workflows/android-build.yml) and [`CHANGELOG.md`](./CHANGELOG.md) to automatically build, sign, and publish **`IngeTrazo-Mobile-beta-0.1.apk`** with a formatted changelog:
+
+1. **Automatic GitHub Releases Page (on Every Push to `main`/`master` or Tag)**:
+   - As soon as you push the project to GitHub (including pushing directly from AI Studio), GitHub Actions automatically:
+     - Runs the unit & Robolectric tests and builds `IngeTrazo-Mobile-beta-0.1.apk`.
+     - Generates release notes combining [`CHANGELOG.md`](./CHANGELOG.md), the recent Git commit log, build metadata, and the APK's `SHA-256` checksum.
+     - Publishes `IngeTrazo-Mobile-beta-0.1.apk` directly to your repository's **Releases** page under tag `beta-0.1` (or your custom tag if you push a `v*` / `beta*` tag).
+2. **GitHub Actions Artifacts**:
+   - Every workflow run also uploads **`IngeTrazo-Mobile-beta-0.1-APK`** under the **Actions** tab → **Artifacts**.
 
 ---
 
