@@ -1,0 +1,42 @@
+package com.example.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// Light Drafting Canvas Palette (Default)
+val DraftCanvasBg = Color(0xFFF4F6F8)
+val DraftSurface = Color(0xFFFFFFFF)
+val DraftSurfaceVariant = Color(0xFFE8EDF3)
+val DraftInkPrimary = Color(0xFF0F172A)
+val DraftInkSecondary = Color(0xFF475569)
+val DraftOutline = Color(0xFFCBD5E1)
+val DraftCyanPrimary = Color(0xFF0284C7)
+val DraftCyanContainer = Color(0xFFE0F2FE)
+val DraftOnCyanContainer = Color(0xFF0C4A6E)
+val DraftSnapOrange = Color(0xFFEA580C)
+val DraftSnapOrangeContainer = Color(0xFFFFEDD5)
+val DraftEmerald = Color(0xFF16A34A)
+val DraftError = Color(0xFFDC2626)
+
+// Dark CAD Workspace Palette (Toggleable)
+val DarkCadBg = Color(0xFF0B1120)
+val DarkCadSurface = Color(0xFF162032)
+val DarkCadSurfaceVariant = Color(0xFF1E293B)
+val DarkCadInkPrimary = Color(0xFFF1F5F9)
+val DarkCadInkSecondary = Color(0xFF94A3B8)
+val DarkCadOutline = Color(0xFF334155)
+val DarkCadCyanPrimary = Color(0xFF38BDF8)
+val DarkCadCyanContainer = Color(0xFF0C4A6E)
+val DarkCadOnCyanContainer = Color(0xFFE0F2FE)
+val DarkCadSnapAmber = Color(0xFFFB923C)
+val DarkCadSnapContainer = Color(0xFF431407)
+val DarkCadEmerald = Color(0xFF4ADE80)
+val DarkCadError = Color(0xFFF87171)
+
+// CAD Axis & Snap Semantic Colors
+val AxisXRed = Color(0xFFDC2626)
+val AxisYGreen = Color(0xFF16A34A)
+val AxisZBlue = Color(0xFF2563EB)
+val SnapVertexGreen = Color(0xFF16A34A)
+val SnapMidpointCyan = Color(0xFF06B6D4)
+val SnapEdgeRed = Color(0xFFEF4444)
+val SnapFaceBlue = Color(0xFF3B82F6)

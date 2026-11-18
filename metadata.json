@@ -1,0 +1,6 @@
+{
+  "name": "IngeTrazo Mobile",
+  "description": "Mobile 3D CAD viewer, precision measurement, angle counting, and experimental AR projection for IngeTrazo (.igz), SketchUp (.skp), OBJ, and glTF models.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
