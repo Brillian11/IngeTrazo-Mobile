@@ -1,5 +1,13 @@
-# Git LFS (Large File Storage) rules for 3D CAD models & binary assets
-*.igz filter=lfs diff=lfs merge=lfs -text
-*.skp filter=lfs diff=lfs merge=lfs -text
-*.glb filter=lfs diff=lfs merge=lfs -text
-*.bin filter=lfs diff=lfs merge=lfs -text
+# Treat 3D CAD assets and keystore files as binary so Git never alters line endings
+*.igz binary
+*.skp binary
+*.glb binary
+*.bin binary
+*.png binary
+*.webp binary
+*.jks binary
+*.keystore binary
+debug.keystore.base64 text eol=lf
+
+# Optional Git LFS rules (uncomment only if adding 3D files larger than 100 MB after running `git lfs install`):
+# *.igz filter=lfs diff=lfs merge=lfs -text
