@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.ingetrazo.vmkxpq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "beta 0.1"
+    versionCode = 2
+    versionName = "beta 0.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

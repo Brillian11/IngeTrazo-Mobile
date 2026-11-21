@@ -1,19 +1,23 @@
-# IngeTrazo Mobile (`beta 0.1`)
+# IngeTrazo Mobile (`beta 0.2`)
 
 **IngeTrazo Mobile** is an Android 3D CAD viewer, precision measurement suite, angle counter, automatic component-based 3D Cut List (Bill of Materials) generator with PDF export, and ARCore/VR projector built for native **IngeTrazo (`.igz`)** models alongside **SketchUp (`.skp`)**, **Wavefront (`.obj`)**, and **glTF 2.0 (`.gltf` / `.glb`)** files.
 
 - **Creator**: [Brillian11](https://github.com/Brillian11)
 - **Special Thanks**: [IngeTrazo Project (`ingelibre/ingetrazo`)](https://github.com/ingelibre/ingetrazo)
-- **Current Version**: `beta 0.1`
+- **Current Version**: `beta 0.2`
 - **License**: [GNU GPL-3.0-or-later](./LICENSE)
 
 ---
 
 ## Screenshots
 
-<p align="center">
-  <img src="public/assets/aistudio/screenshot_1_e78ff267.png" alt="IngeTrazo Mobile 3D CAD Viewer & Interactive Cut List" width="360" />
-</p>
+| Project Hub (Dark Mode) | 3D CAD Viewer & Tape Measure |
+| :---: | :---: |
+| <img src="public/assets/aistudio/Screenshot_20261121-230025_IngeTrazo_Mobile_b4956f07.png" alt="IngeTrazo Mobile Project Hub in Dark Mode" width="280" /> | <img src="public/assets/aistudio/Screenshot_20261121-225713_IngeTrazo_Mobile_88977812.png" alt="IngeTrazo Mobile 3D CAD Viewer with Magnetic Snap Tape Measurements" width="280" /> |
+
+| AR Projection (Realistic Scene + HDR & Record) | 3D CAD Viewer & Interactive Cut List |
+| :---: | :---: |
+| <img src="public/assets/aistudio/Screenshot_20261121-225646_IngeTrazo_Mobile_7f26d98a.png" alt="IngeTrazo Mobile AR Projection with Realistic Scene + HDR Lighting and Shadows" width="280" /> | <img src="public/assets/aistudio/screenshot_1_e78ff267.png" alt="IngeTrazo Mobile 3D CAD Viewer & Interactive Cut List" width="280" /> |
 
 ---
 
@@ -108,15 +112,15 @@ gradle :app:testDebugUnitTest
 ```
 
 ### 4. Auto-Generated APK & Changelog on GitHub Releases
-This repository is pre-configured with [`.github/workflows/android-build.yml`](./.github/workflows/android-build.yml) and [`CHANGELOG.md`](./CHANGELOG.md) to automatically build, sign, and publish **`IngeTrazo-Mobile-beta-0.1.apk`** with a formatted changelog:
+This repository is pre-configured with [`.github/workflows/android-build.yml`](./.github/workflows/android-build.yml) and [`CHANGELOG.md`](./CHANGELOG.md) to automatically build, sign, and publish **`IngeTrazo-Mobile-beta-0.2.apk`** with a formatted changelog:
 
 1. **Automatic GitHub Releases Page (on Every Push to `main`/`master` or Tag)**:
    - As soon as you push the project to GitHub (including pushing directly from AI Studio), GitHub Actions automatically:
-     - Runs the unit & Robolectric tests and builds `IngeTrazo-Mobile-beta-0.1.apk`.
+     - Runs the unit & Robolectric tests and builds `IngeTrazo-Mobile-beta-0.2.apk`.
      - Generates release notes combining [`CHANGELOG.md`](./CHANGELOG.md), the recent Git commit log, build metadata, and the APK's `SHA-256` checksum.
-     - Publishes `IngeTrazo-Mobile-beta-0.1.apk` directly to your repository's **Releases** page under tag `beta-0.1` (or your custom tag if you push a `v*` / `beta*` tag).
+     - Publishes `IngeTrazo-Mobile-beta-0.2.apk` directly to your repository's **Releases** page under tag `beta-0.2` (or your custom tag if you push a `v*` / `beta*` tag).
 2. **GitHub Actions Artifacts**:
-   - Every workflow run also uploads **`IngeTrazo-Mobile-beta-0.1-APK`** under the **Actions** tab → **Artifacts**.
+   - Every workflow run also uploads **`IngeTrazo-Mobile-beta-0.2-APK`** under the **Actions** tab → **Artifacts**.
 
 ---
 

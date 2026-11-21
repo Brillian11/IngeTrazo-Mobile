@@ -2,6 +2,18 @@
 
 All notable changes to **IngeTrazo Mobile** are documented in this file and automatically published to the GitHub Releases page.
 
+## [beta 0.2] - Realistic AR Lighting, AR Record & Dark Mode Polish
+
+### Added
+- **AR Camera Photo & Video Recorder (`Record` Tab)**: Capture clean AR photos (`PixelCopy`) and hardware-accelerated H.264 MP4 videos directly from the AR viewport with a live `REC` status pill, mid-recording snapshots, and instant View/Share actions.
+- **Live Camera Telemetry for Realistic AR Lighting**: Fuses ARCore Environmental HDR with real camera ISO, shutter speed, EV100, white balance Kelvin, and ambient light sensor readings for adaptive Scene + HDR lighting and soft floor shadows.
+
+### Fixed
+- **AR Realistic Render Stability**: Resolved OpenGL ES 3.00 shader precision linking issues that caused camera glitches and missing textures in AR Realistic Render mode.
+- **Initial AR Real-World Scale Accuracy**: Synchronized initial model scale and foundation state before first anchor placement and added metric-plane hit prioritization with automatic refinement of approximate initial anchors.
+- **Dark Mode Header & Menu Legibility**: Added root `LocalContentColor` and explicit `contentColor` / icon tints across Home, 3D Viewer, and AR View translucent HUDs and dropdown menus, plus synced system bar icon contrast.
+- **GitHub Actions CI**: Upgraded workflow actions to native Node.js 24 versions.
+
 ## [beta 0.1] - Initial Beta Release
 
 ### Added

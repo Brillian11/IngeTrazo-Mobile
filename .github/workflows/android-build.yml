@@ -94,14 +94,14 @@ jobs:
       - name: Prepare APK & Generate Release Changelog
         id: prep_release
         run: |
-          APK_OUT="app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.1.apk"
+          APK_OUT="app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.2.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$APK_OUT"
 
-          # Determine tag name (use pushed tag if available, otherwise beta-0.1)
+          # Determine tag name (use pushed tag if available, otherwise beta-0.2)
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
           else
-            TAG_NAME="beta-0.1"
+            TAG_NAME="beta-0.2"
           fi
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
@@ -110,12 +110,12 @@ jobs:
           BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
 
           {
-            echo "## IngeTrazo Mobile (\`beta 0.1\`) — Automated APK Release"
+            echo "## IngeTrazo Mobile (\`beta 0.2\`) — Automated APK Release"
             echo ""
-            echo "- **Version**: \`beta 0.1\` (\`versionCode 1\`)"
+            echo "- **Version**: \`beta 0.2\` (\`versionCode 2\`)"
             echo "- **Build Number**: \`#${GITHUB_RUN_NUMBER}\` (${BUILD_DATE})"
             echo "- **Commit**: \`${GITHUB_SHA::7}\`"
-            echo "- **APK File**: \`IngeTrazo-Mobile-beta-0.1.apk\` (${APK_SIZE})"
+            echo "- **APK File**: \`IngeTrazo-Mobile-beta-0.2.apk\` (${APK_SIZE})"
             echo "- **SHA-256**: \`${APK_SHA256}\`"
             echo "- **Creator**: [Brillian11](https://github.com/Brillian11)"
             echo "- **Special Thanks**: [IngeTrazo Project](https://github.com/ingelibre/ingetrazo)"
@@ -132,8 +132,8 @@ jobs:
       - name: Upload APK to GitHub Actions Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: IngeTrazo-Mobile-beta-0.1-APK
-          path: app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.1.apk
+          name: IngeTrazo-Mobile-beta-0.2-APK
+          path: app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.2.apk
           if-no-files-found: error
 
       - name: Publish APK & Changelog to GitHub Releases Page
@@ -142,9 +142,9 @@ jobs:
         with:
           tag_name: ${{ steps.prep_release.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
-          name: "IngeTrazo Mobile beta 0.1 (Build #${{ github.run_number }})"
+          name: "IngeTrazo Mobile beta 0.2 (Build #${{ github.run_number }})"
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
           make_latest: 'true'
-          files: app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.1.apk
+          files: app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.2.apk

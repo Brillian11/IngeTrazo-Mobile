@@ -106,13 +106,13 @@ class IngeTrazoRobolectricCujTest {
         assertTrue(darkToggled)
 
         // Open 3-dot overflow menu -> About the App
-        assertEquals("beta 0.1", BuildConfig.VERSION_NAME)
+        assertEquals("beta 0.2", BuildConfig.VERSION_NAME)
         composeRule.onNodeWithTag("hub_overflow_menu_button").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("hub_menu_about").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("hub_about_dialog").assertIsDisplayed()
-        composeRule.onNodeWithText("Version: beta 0.1").assertIsDisplayed()
+        composeRule.onNodeWithText("Version: beta 0.2").assertIsDisplayed()
         composeRule.onNodeWithText("Created by Brillian11").assertIsDisplayed()
         composeRule.onNodeWithText("https://github.com/Brillian11").assertIsDisplayed()
         composeRule.onNodeWithText("Special Thanks: IngeTrazo Project").assertIsDisplayed()
