@@ -76,6 +76,11 @@ fun UnitSettingsDialog(
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                         },
+                        contentColor = if (selected) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
                         border = BorderStroke(
                             width = if (selected) 1.5.dp else 1.dp,
                             color = if (selected) {
@@ -140,6 +145,7 @@ fun UnitSettingsDialog(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(

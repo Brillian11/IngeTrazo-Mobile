@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AdsClick
 import androidx.compose.material.icons.filled.Architecture
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PanTool
@@ -88,12 +90,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.local.AngleMeasurementEntity
 import com.example.data.local.CountedAngleEntity
@@ -115,6 +120,8 @@ import com.example.ui.theme.CadNumericStyle
 import com.example.ui.viewer.gl.CadCamera
 import com.example.ui.viewer.gl.CadGlRenderer
 import com.example.ui.viewer.gl.CadViewportView
+import com.example.ui.viewer.gl.MeasurementContextMenuOverlay
+import com.example.ui.viewer.gl.MeasurementContextMenuState
 import com.example.ui.viewer.gl.OverlayRenderState
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -139,6 +146,7 @@ fun CadViewerScreen(
     onTapViewport: (Float, Float, CadCamera) -> Unit,
     onSnapHover: (Float, Float, CadCamera) -> Unit,
     onUndoPick: () -> Unit,
+    onRedoPick: () -> Unit = {},
     onClearPicks: () -> Unit,
     onClearSelection: () -> Unit,
     onToggleLayer: (String) -> Unit,
@@ -164,11 +172,22 @@ fun CadViewerScreen(
     cutListState: CutListUiState = CutListUiState(),
     onOpenCutList: () -> Unit = {},
     onSelectCutListRow: (String, CadCamera) -> Unit = { _, _ -> },
+    onLongPressCutListRow: (String) -> Unit = {},
+    onToggleCutListCheck: (String) -> Unit = {},
+    onToggleSelectAllCutList: () -> Unit = {},
+    onExitCutListSelectionMode: () -> Unit = {},
     onSetExplodeFraction: (Float) -> Unit = {},
-    onExportCutListPdf: (suspend () -> Bitmap?) -> Unit = {},
-    onDismissExportedPdf: () -> Unit = {}
+    onExportCutListPdf: (suspend (Set<String>?) -> Bitmap?) -> Unit = {},
+    onDismissExportedPdf: () -> Unit = {},
+    onBeginLengthDotDrag: (Float, Float, CadCamera, Double) -> Boolean = { _, _, _, _ -> false },
+    onUpdateLengthDotDrag: (Float, Float, CadCamera) -> Unit = { _, _, _ -> },
+    onEndLengthDotDrag: (Boolean) -> Unit = {},
+    onBeginAngleDotDrag: (Float, Float, CadCamera, Double) -> Boolean = { _, _, _, _ -> false },
+    onUpdateAngleDotDrag: (Float, Float, CadCamera) -> Unit = { _, _, _ -> },
+    onEndAngleDotDrag: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val hitRadiusPx = with(LocalDensity.current) { 28.dp.toPx().toDouble() }
     val camera = remember(document.documentKey) {
         CadCamera().apply { zoomExtents(document.bounds) }
     }
@@ -176,6 +195,7 @@ fun CadViewerScreen(
         CadGlRenderer(camera)
     }
 
+    var showMoreMenu by remember { mutableStateOf(false) }
     var showViewsMenu by remember { mutableStateOf(false) }
     var showStyleMenu by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -183,11 +203,16 @@ fun CadViewerScreen(
     var activeSheet by remember { mutableStateOf<ViewerSheetType?>(null) }
     var showCutListSplit by remember { mutableStateOf(false) }
     var tabletSideTab by remember { mutableIntStateOf(1) } // 0 = Hierarchy, 1 = Measure & Count, 2 = Cut List
-    var snapshotRequester by remember { mutableStateOf<(suspend () -> Bitmap?)?>(null) }
+    var snapshotRequester by remember { mutableStateOf<(suspend (Set<String>?) -> Bitmap?)?>(null) }
+    var viewportPaneSize by remember { mutableStateOf(IntSize.Zero) }
+    var measurementContextMenu by remember { mutableStateOf<MeasurementContextMenuState?>(null) }
     val coroutineScope = rememberCoroutineScope()
-    val topToolbarScrollState = rememberScrollState()
     val bottomToolbarScrollState = rememberScrollState()
     val railScrollState = rememberScrollState()
+
+    LaunchedEffect(viewerState.activeTool, document.documentKey) {
+        measurementContextMenu = null
+    }
 
     val overlayState = remember(viewerState, preferences.darkCadMode, lengths, angles) {
         OverlayRenderState(
@@ -203,6 +228,9 @@ fun CadViewerScreen(
             activeLengthPicks = viewerState.activeLengthPicks,
             activeAnglePicks = viewerState.activeAnglePicks,
             activeSnap = viewerState.activeSnap,
+            activeLengthDotDrag = viewerState.activeLengthDotDrag,
+            activeAngleDotDrag = viewerState.activeAngleDotDrag,
+            arTrackingDot = null,
             savedLengths = lengths,
             savedAngles = angles
         )
@@ -220,10 +248,11 @@ fun CadViewerScreen(
         val showLandscapeSplitCutList = isCompactLandscape && showCutListSplit
 
         BackHandler {
-            if (!isWideTablet && showCutListSplit) {
-                showCutListSplit = false
-            } else {
-                onBack()
+            when {
+                measurementContextMenu != null -> measurementContextMenu = null
+                cutListState.isExportSelectionMode -> onExitCutListSelectionMode()
+                !isWideTablet && showCutListSplit -> showCutListSplit = false
+                else -> onBack()
             }
         }
 
@@ -243,6 +272,7 @@ fun CadViewerScreen(
                     modifier = Modifier
                         .weight(if (showLandscapeSplitCutList) 0.56f else 1f)
                         .fillMaxHeight()
+                        .onSizeChanged { viewportPaneSize = it }
                 ) {
                     CadViewportView(
                         document = document,
@@ -259,7 +289,16 @@ fun CadViewerScreen(
                         onRegisterSnapshotRequester = { snapshotRequester = it },
                         onTapAt = { x, y -> onTapViewport(x, y, camera) },
                         onDoubleTap = { camera.zoomExtents(document.bounds) },
-                        onSnapHover = { x, y -> onSnapHover(x, y, camera) }
+                        onSnapHover = { x, y -> onSnapHover(x, y, camera) },
+                        onBeginLengthDotDrag = { x, y -> onBeginLengthDotDrag(x, y, camera, hitRadiusPx) },
+                        onUpdateLengthDotDrag = { x, y -> onUpdateLengthDotDrag(x, y, camera) },
+                        onEndLengthDotDrag = onEndLengthDotDrag,
+                        onBeginAngleDotDrag = { x, y -> onBeginAngleDotDrag(x, y, camera, hitRadiusPx) },
+                        onUpdateAngleDotDrag = { x, y -> onUpdateAngleDotDrag(x, y, camera) },
+                        onEndAngleDotDrag = onEndAngleDotDrag,
+                        onDeleteLength = onDeleteLength,
+                        onDeleteAngle = onDeleteAngle,
+                        onOpenMeasurementContextMenu = { menu -> measurementContextMenu = menu }
                     )
 
                 // Top Floating CAD HUD
@@ -275,6 +314,7 @@ fun CadViewerScreen(
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         tonalElevation = 4.dp,
                         shadowElevation = 4.dp,
                         modifier = Modifier.fillMaxWidth()
@@ -287,13 +327,18 @@ fun CadViewerScreen(
                                 onClick = onBack,
                                 modifier = Modifier.testTag("viewer_back_button")
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Hub")
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back to Hub",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
                             }
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = document.title,
                                     style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -306,171 +351,234 @@ fun CadViewerScreen(
                                 )
                             }
 
-                            if (topToolbarScrollState.canScrollBackward) {
-                                ToolbarScrollArrowButton(
-                                    icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                    contentDescription = "More tools left",
-                                    tag = "top_toolbar_scroll_left",
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            val target = (topToolbarScrollState.value - 220).coerceAtLeast(0)
-                                            topToolbarScrollState.animateScrollTo(target)
-                                        }
-                                    }
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .weight(
-                                        if (this@BoxWithConstraints.maxWidth < 520.dp) 1.35f else 2.2f,
-                                        fill = false
-                                    )
-                                    .horizontalScroll(topToolbarScrollState)
-                                    .testTag("top_toolbar_tools_row"),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            Box {
                                 IconButton(
-                                    onClick = { showInfoDialog = true },
-                                    modifier = Modifier.testTag("viewer_info_button")
-                                ) {
-                                    Icon(Icons.Default.Info, contentDescription = "Model Metadata")
-                                }
-
-                                IconButton(
-                                    onClick = { onToggleOrthographic(camera) },
-                                    modifier = Modifier.testTag("viewer_ortho_toggle")
+                                    onClick = { showMoreMenu = true },
+                                    modifier = Modifier.testTag("viewer_more_menu_button")
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Architecture,
-                                        contentDescription = "Toggle Perspective / Orthographic",
-                                        tint = if (viewerState.isOrthographic) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "Viewer Menu",
+                                        tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
 
-                                Box {
-                                    IconButton(
-                                        onClick = { showViewsMenu = true },
+                                DropdownMenu(
+                                    expanded = showMoreMenu,
+                                    onDismissRequest = { showMoreMenu = false },
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = "AR Projection",
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.secondary
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.ViewInAr,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.secondary
+                                            )
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            onOpenArMode()
+                                        },
+                                        modifier = Modifier.testTag("viewer_ar_button")
+                                    )
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("Camera Views…") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.CameraAlt, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showViewsMenu = true
+                                        },
                                         modifier = Modifier.testTag("viewer_views_button")
-                                    ) {
-                                        Icon(Icons.Default.CameraAlt, contentDescription = "Standard & Saved Views")
-                                    }
-                                    DropdownMenu(
-                                        expanded = showViewsMenu,
-                                        onDismissRequest = { showViewsMenu = false }
-                                    ) {
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Display Style: ${viewerState.displayStyle.label}") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Palette, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showStyleMenu = true
+                                        },
+                                        modifier = Modifier.testTag("viewer_style_button")
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (viewerState.isOrthographic) {
+                                                    "Projection: Orthographic"
+                                                } else {
+                                                    "Projection: Perspective"
+                                                }
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Architecture,
+                                                contentDescription = null,
+                                                tint = if (viewerState.isOrthographic) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
+                                            )
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            onToggleOrthographic(camera)
+                                        },
+                                        modifier = Modifier.testTag("viewer_ortho_toggle")
+                                    )
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(if (preferences.darkCadMode) "Light Mode" else "Dark CAD Mode")
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (preferences.darkCadMode) {
+                                                    Icons.Default.LightMode
+                                                } else {
+                                                    Icons.Default.DarkMode
+                                                },
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            onToggleTheme(!preferences.darkCadMode)
+                                        },
+                                        modifier = Modifier.testTag("viewer_theme_toggle")
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(if (isLandscape) "Switch to Portrait" else "Switch to Landscape")
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (isLandscape) {
+                                                    Icons.Default.StayCurrentPortrait
+                                                } else {
+                                                    Icons.Default.StayCurrentLandscape
+                                                },
+                                                contentDescription = null,
+                                                tint = if (isLandscape) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
+                                            )
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            onToggleLandscape(isLandscape)
+                                        },
+                                        modifier = Modifier.testTag("viewer_landscape_toggle")
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Model Info") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Info, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showInfoDialog = true
+                                        },
+                                        modifier = Modifier.testTag("viewer_info_button")
+                                    )
+                                }
+
+                                DropdownMenu(
+                                    expanded = showViewsMenu,
+                                    onDismissRequest = { showViewsMenu = false },
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Zoom Extents") },
+                                        leadingIcon = { Icon(Icons.Default.FitScreen, contentDescription = null) },
+                                        onClick = {
+                                            camera.zoomExtents(document.bounds)
+                                            showViewsMenu = false
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    StandardView.entries.forEach { sv ->
                                         DropdownMenuItem(
-                                            text = { Text("Zoom Extents") },
-                                            leadingIcon = { Icon(Icons.Default.FitScreen, contentDescription = null) },
+                                            text = { Text("View: ${sv.label}") },
                                             onClick = {
-                                                camera.zoomExtents(document.bounds)
+                                                onApplyStandardView(sv, camera)
                                                 showViewsMenu = false
                                             }
                                         )
+                                    }
+                                    if (document.savedViews.isNotEmpty()) {
                                         HorizontalDivider()
-                                        StandardView.entries.forEach { sv ->
+                                        document.savedViews.forEach { saved ->
                                             DropdownMenuItem(
-                                                text = { Text("View: ${sv.label}") },
+                                                text = { Text("Scene: ${saved.name}") },
                                                 onClick = {
-                                                    onApplyStandardView(sv, camera)
+                                                    onApplySavedView(saved, camera)
                                                     showViewsMenu = false
                                                 }
                                             )
                                         }
-                                        if (document.savedViews.isNotEmpty()) {
-                                            HorizontalDivider()
-                                            document.savedViews.forEach { saved ->
-                                                DropdownMenuItem(
-                                                    text = { Text("Scene: ${saved.name}") },
-                                                    onClick = {
-                                                        onApplySavedView(saved, camera)
-                                                        showViewsMenu = false
-                                                    }
-                                                )
+                                    }
+                                }
+
+                                DropdownMenu(
+                                    expanded = showStyleMenu,
+                                    onDismissRequest = { showStyleMenu = false },
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ) {
+                                    DisplayStyle.entries.forEach { st ->
+                                        DropdownMenuItem(
+                                            text = { Text(st.label) },
+                                            onClick = {
+                                                onSetDisplayStyle(st)
+                                                showStyleMenu = false
                                             }
-                                        }
+                                        )
                                     }
-                                }
-
-                                Box {
-                                    IconButton(
-                                        onClick = { showStyleMenu = true },
-                                        modifier = Modifier.testTag("viewer_style_button")
-                                    ) {
-                                        Icon(Icons.Default.Palette, contentDescription = "Display Style")
-                                    }
-                                    DropdownMenu(
-                                        expanded = showStyleMenu,
-                                        onDismissRequest = { showStyleMenu = false }
-                                    ) {
-                                        DisplayStyle.entries.forEach { st ->
-                                            DropdownMenuItem(
-                                                text = { Text(st.label) },
-                                                onClick = {
-                                                    onSetDisplayStyle(st)
-                                                    showStyleMenu = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-
-                                IconButton(
-                                    onClick = { onToggleTheme(!preferences.darkCadMode) },
-                                    modifier = Modifier.testTag("viewer_theme_toggle")
-                                ) {
-                                    Icon(
-                                        imageVector = if (preferences.darkCadMode) Icons.Default.LightMode else Icons.Default.DarkMode,
-                                        contentDescription = "Toggle Dark CAD Mode"
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { onToggleLandscape(isLandscape) },
-                                    modifier = Modifier.testTag("viewer_landscape_toggle")
-                                ) {
-                                    Icon(
-                                        imageVector = if (isLandscape) Icons.Default.StayCurrentPortrait else Icons.Default.StayCurrentLandscape,
-                                        contentDescription = if (isLandscape) "Exit Landscape Mode" else "Switch to Landscape Mode",
-                                        tint = if (isLandscape) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = onOpenArMode,
-                                    modifier = Modifier.testTag("viewer_ar_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ViewInAr,
-                                        contentDescription = "AR Projection (Experimental)",
-                                        tint = MaterialTheme.colorScheme.secondary
-                                    )
                                 }
                             }
+                        }
+                    }
 
-                            if (topToolbarScrollState.canScrollForward) {
-                                ToolbarScrollArrowButton(
-                                    icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = "More tools right",
-                                    tag = "top_toolbar_scroll_right",
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            val target = (topToolbarScrollState.value + 220)
-                                                .coerceAtMost(topToolbarScrollState.maxValue)
-                                            topToolbarScrollState.animateScrollTo(target)
+                    AnimatedVisibility(visible = cutListState.lastExportedPdf != null) {
+                        cutListState.lastExportedPdf?.let { exported ->
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Spacer(Modifier.height(6.dp))
+                                PdfExportToastBanner(
+                                    exported = exported,
+                                    onOpenPdf = { item ->
+                                        if (!launchOpenPdf(context, item)) {
+                                            launchPdfShareSheet(context, item)
                                         }
-                                    }
+                                    },
+                                    onSharePdf = { item -> launchPdfShareSheet(context, item) },
+                                    onDismiss = onDismissExportedPdf
                                 )
                             }
                         }
                     }
 
-                    AnimatedVisibility(visible = viewerState.statusBanner != null) {
+                    AnimatedVisibility(visible = viewerState.statusBanner != null && cutListState.lastExportedPdf == null) {
                         viewerState.statusBanner?.let { msg ->
                             Spacer(Modifier.height(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f),
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                                 tonalElevation = 2.dp,
                                 modifier = Modifier.align(Alignment.CenterHorizontally)
                             ) {
@@ -491,6 +599,7 @@ fun CadViewerScreen(
                                         Icon(
                                             Icons.Default.Close,
                                             contentDescription = "Dismiss status",
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                             modifier = Modifier.size(14.dp)
                                         )
                                     }
@@ -505,6 +614,7 @@ fun CadViewerScreen(
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         tonalElevation = 6.dp,
                         shadowElevation = 6.dp,
                         modifier = Modifier
@@ -648,6 +758,7 @@ fun CadViewerScreen(
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             tonalElevation = 4.dp,
                             modifier = Modifier.padding(bottom = if (isCompactLandscape) 2.dp else 8.dp)
                         ) {
@@ -657,15 +768,58 @@ fun CadViewerScreen(
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 if (viewerState.activeTool == CadTool.MEASURE_LENGTH) {
+                                    viewerState.activeLengthDotDrag?.let { activeDrag ->
+                                        FilterChip(
+                                            selected = true,
+                                            onClick = {},
+                                            label = {
+                                                val snapName = activeDrag.snapType?.label ?: "Free move"
+                                                Text("Dragging Dot · $snapName", style = CadNumericStyle)
+                                            },
+                                            modifier = Modifier.testTag("viewer_dragging_dot_chip")
+                                        )
+                                    }
                                     FilterChip(
                                         selected = false,
-                                        onClick = { showUnitsDialog = true },
-                                        leadingIcon = { Icon(Icons.Default.SquareFoot, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                                        label = { Text("Unit: ${preferences.unitSystem.symbol}", style = CadNumericStyle) },
-                                        modifier = Modifier.testTag("viewer_contextual_unit_chip")
+                                        enabled = viewerState.canUndoTape,
+                                        onClick = onUndoPick,
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Undo,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text("Undo") },
+                                        modifier = Modifier.testTag("viewer_measure_undo_button")
+                                    )
+                                    FilterChip(
+                                        selected = false,
+                                        enabled = viewerState.canRedoTape,
+                                        onClick = onRedoPick,
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Redo,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text("Redo") },
+                                        modifier = Modifier.testTag("viewer_measure_redo_button")
                                     )
                                 }
                                 if (viewerState.activeTool == CadTool.MEASURE_ANGLE) {
+                                    viewerState.activeAngleDotDrag?.let { activeDrag ->
+                                        FilterChip(
+                                            selected = true,
+                                            onClick = {},
+                                            label = {
+                                                val snapName = activeDrag.snapType?.label ?: "Free move"
+                                                Text("Dragging Angle Dot · $snapName", style = CadNumericStyle)
+                                            },
+                                            modifier = Modifier.testTag("viewer_dragging_angle_dot_chip")
+                                        )
+                                    }
                                     AngleInputMode.entries.forEach { m ->
                                         FilterChip(
                                             selected = viewerState.angleInputMode == m,
@@ -673,6 +827,34 @@ fun CadViewerScreen(
                                             label = { Text(m.label) }
                                         )
                                     }
+                                    FilterChip(
+                                        selected = false,
+                                        enabled = viewerState.canUndoAngle,
+                                        onClick = onUndoPick,
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Undo,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text("Undo") },
+                                        modifier = Modifier.testTag("viewer_measure_undo_button")
+                                    )
+                                    FilterChip(
+                                        selected = false,
+                                        enabled = viewerState.canRedoAngle,
+                                        onClick = onRedoPick,
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Redo,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text("Redo") },
+                                        modifier = Modifier.testTag("viewer_measure_redo_button")
+                                    )
                                 }
                                 viewerState.activeSnap?.let { s ->
                                     FilterChip(
@@ -681,17 +863,16 @@ fun CadViewerScreen(
                                         label = { Text("Snap: ${s.type.label}", style = CadNumericStyle) }
                                     )
                                 }
-                                if (viewerState.activeLengthPicks.isNotEmpty() || viewerState.activeAnglePicks.isNotEmpty()) {
-                                    FilterChip(
-                                        selected = false,
-                                        onClick = onUndoPick,
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                                        label = { Text("Undo") }
-                                    )
+                                if (viewerState.activeLengthPicks.isNotEmpty() ||
+                                    viewerState.activeAnglePicks.isNotEmpty() ||
+                                    viewerState.pendingAngleEdge != null ||
+                                    viewerState.pendingAngleFace != null
+                                ) {
                                     FilterChip(
                                         selected = false,
                                         onClick = onClearPicks,
-                                        label = { Text("Clear") }
+                                        label = { Text("Clear") },
+                                        modifier = Modifier.testTag("viewer_measure_clear_button")
                                     )
                                 }
                                 if (viewerState.selectedFaceIds.isNotEmpty() || viewerState.selectedEdgeIds.isNotEmpty()) {
@@ -717,6 +898,7 @@ fun CadViewerScreen(
                         Surface(
                             shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             tonalElevation = 6.dp,
                             shadowElevation = 6.dp
                         ) {
@@ -839,6 +1021,25 @@ fun CadViewerScreen(
                     }
                     }
                 }
+
+                // Long-press context menu rendered above Top HUD and Bottom Toolbars
+                measurementContextMenu?.let { menu ->
+                    MeasurementContextMenuOverlay(
+                        menu = menu,
+                        containerSize = viewportPaneSize,
+                        unitSystem = preferences.unitSystem,
+                        decimals = preferences.precisionDecimals,
+                        onDeleteLength = { id ->
+                            onDeleteLength(id)
+                            measurementContextMenu = null
+                        },
+                        onDeleteAngle = { id ->
+                            onDeleteAngle(id)
+                            measurementContextMenu = null
+                        },
+                        onDismiss = { measurementContextMenu = null }
+                    )
+                }
                 }
 
                 // Right Split Pane for Cut List in Compact Landscape
@@ -863,13 +1064,20 @@ fun CadViewerScreen(
                             showCloseButton = true,
                             showViewportModeStrip = false,
                             onSelectRow = { groupId -> onSelectCutListRow(groupId, camera) },
+                            onLongPressRow = onLongPressCutListRow,
+                            onToggleCheck = onToggleCutListCheck,
+                            onToggleSelectAll = onToggleSelectAllCutList,
+                            onExitSelectionMode = onExitCutListSelectionMode,
                             onExplodeChange = onSetExplodeFraction,
                             onOpenUnitDialog = { showUnitsDialog = true },
                             onSetTool = onSetTool,
-                            onExportPdf = { onExportCutListPdf { snapshotRequester?.invoke() } },
+                            onExportPdf = { onExportCutListPdf { isolated -> snapshotRequester?.invoke(isolated) } },
                             onSharePdf = { exported -> launchPdfShareSheet(context, exported) },
                             onDismissPdfResult = onDismissExportedPdf,
-                            onClose = { showCutListSplit = false },
+                            onClose = {
+                                if (cutListState.isExportSelectionMode) onExitCutListSelectionMode()
+                                showCutListSplit = false
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -951,10 +1159,14 @@ fun CadViewerScreen(
                                     showCloseButton = false,
                                     showViewportModeStrip = false,
                                     onSelectRow = { groupId -> onSelectCutListRow(groupId, camera) },
+                                    onLongPressRow = onLongPressCutListRow,
+                                    onToggleCheck = onToggleCutListCheck,
+                                    onToggleSelectAll = onToggleSelectAllCutList,
+                                    onExitSelectionMode = onExitCutListSelectionMode,
                                     onExplodeChange = onSetExplodeFraction,
                                     onOpenUnitDialog = { showUnitsDialog = true },
                                     onSetTool = onSetTool,
-                                    onExportPdf = { onExportCutListPdf { snapshotRequester?.invoke() } },
+                                    onExportPdf = { onExportCutListPdf { isolated -> snapshotRequester?.invoke(isolated) } },
                                     onSharePdf = { exported -> launchPdfShareSheet(context, exported) },
                                     onDismissPdfResult = onDismissExportedPdf,
                                     onClose = {},
@@ -987,13 +1199,20 @@ fun CadViewerScreen(
                         showCloseButton = true,
                         showViewportModeStrip = true,
                         onSelectRow = { groupId -> onSelectCutListRow(groupId, camera) },
+                        onLongPressRow = onLongPressCutListRow,
+                        onToggleCheck = onToggleCutListCheck,
+                        onToggleSelectAll = onToggleSelectAllCutList,
+                        onExitSelectionMode = onExitCutListSelectionMode,
                         onExplodeChange = onSetExplodeFraction,
                         onOpenUnitDialog = { showUnitsDialog = true },
                         onSetTool = onSetTool,
-                        onExportPdf = { onExportCutListPdf { snapshotRequester?.invoke() } },
+                        onExportPdf = { onExportCutListPdf { isolated -> snapshotRequester?.invoke(isolated) } },
                         onSharePdf = { exported -> launchPdfShareSheet(context, exported) },
                         onDismissPdfResult = onDismissExportedPdf,
-                        onClose = { showCutListSplit = false },
+                        onClose = {
+                            if (cutListState.isExportSelectionMode) onExitCutListSelectionMode()
+                            showCutListSplit = false
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -1147,18 +1366,17 @@ private fun ToolbarScrollArrowButton(
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+        color = Color.Transparent,
         modifier = Modifier
             .padding(horizontal = 2.dp)
-            .size(width = 26.dp, height = 36.dp)
+            .size(width = 28.dp, height = 36.dp)
             .testTag(tag)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
             )
         }

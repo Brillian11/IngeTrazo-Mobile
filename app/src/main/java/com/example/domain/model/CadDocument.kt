@@ -63,7 +63,8 @@ enum class CadTool(val label: String) {
     ORBIT("Orbit"),
     PAN("Pan"),
     MEASURE_LENGTH("Tape"),
-    MEASURE_ANGLE("Angle")
+    MEASURE_ANGLE("Angle"),
+    AR_TRACKING_DOT("AR Dot")
 }
 
 enum class SnapType(val label: String) {

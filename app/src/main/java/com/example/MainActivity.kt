@@ -3,13 +3,16 @@ package com.example
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
+import android.graphics.Color as AndroidColor
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +50,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MainViewModel = hiltViewModel()
             val prefs by viewModel.userPreferences.collectAsStateWithLifecycle()
+
+            SideEffect {
+                val barStyle = if (prefs.darkCadMode) {
+                    SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                }
+                enableEdgeToEdge(
+                    statusBarStyle = barStyle,
+                    navigationBarStyle = barStyle
+                )
+            }
 
             IngeTrazoTheme(darkCadMode = prefs.darkCadMode) {
                 IngeTrazoNavApp(
@@ -162,6 +177,7 @@ fun IngeTrazoNavApp(
                     onTapViewport = viewModel::onViewportTap,
                     onSnapHover = viewModel::onSnapHover,
                     onUndoPick = viewModel::undoActivePick,
+                    onRedoPick = viewModel::redoActivePick,
                     onClearPicks = viewModel::clearActivePicks,
                     onClearSelection = viewModel::clearSelection,
                     onToggleLayer = viewModel::toggleLayerVisibility,
@@ -192,11 +208,21 @@ fun IngeTrazoNavApp(
                     cutListState = cutListState,
                     onOpenCutList = viewModel::ensureCutListExtracted,
                     onSelectCutListRow = viewModel::onSelectCutListRow,
+                    onLongPressCutListRow = viewModel::onLongPressCutListRow,
+                    onToggleCutListCheck = viewModel::onToggleCutListCheck,
+                    onToggleSelectAllCutList = viewModel::onToggleSelectAllCutList,
+                    onExitCutListSelectionMode = viewModel::exitCutListSelectionMode,
                     onSetExplodeFraction = viewModel::setExplodeFraction,
                     onExportCutListPdf = { captureSnapshot ->
                         viewModel.exportCutListPdf(context, captureSnapshot)
                     },
-                    onDismissExportedPdf = viewModel::dismissExportedPdfBanner
+                    onDismissExportedPdf = viewModel::dismissExportedPdfBanner,
+                    onBeginLengthDotDrag = viewModel::beginLengthDotDrag,
+                    onUpdateLengthDotDrag = viewModel::updateLengthDotDrag,
+                    onEndLengthDotDrag = viewModel::endLengthDotDrag,
+                    onBeginAngleDotDrag = viewModel::beginAngleDotDrag,
+                    onUpdateAngleDotDrag = viewModel::updateAngleDotDrag,
+                    onEndAngleDotDrag = viewModel::endAngleDotDrag
                 )
             }
         }
@@ -210,6 +236,8 @@ fun IngeTrazoNavApp(
                     document = doc,
                     unitSystem = prefs.unitSystem,
                     precisionDecimals = prefs.precisionDecimals,
+                    initialTrackingDot = viewerState.arTrackingDot,
+                    onUpdateTrackingDot = viewModel::setArTrackingDot,
                     onChangeUnits = viewModel::setUnitSystem,
                     onChangeDecimals = viewModel::setPrecisionDecimals,
                     onToggleLandscape = { currentlyLandscape ->

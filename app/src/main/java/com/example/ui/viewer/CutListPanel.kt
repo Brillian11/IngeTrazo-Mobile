@@ -4,9 +4,13 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,7 +30,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AdsClick
+import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.PanTool
@@ -36,11 +42,15 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled._3dRotation
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -50,10 +60,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -80,16 +93,27 @@ fun CutListPanel(
     showCloseButton: Boolean,
     showViewportModeStrip: Boolean,
     onSelectRow: (String) -> Unit,
+    onLongPressRow: (String) -> Unit = {},
+    onToggleCheck: (String) -> Unit = {},
+    onToggleSelectAll: () -> Unit = {},
+    onExitSelectionMode: () -> Unit = {},
     onExplodeChange: (Float) -> Unit,
     onOpenUnitDialog: () -> Unit,
     onSetTool: (CadTool) -> Unit,
     onExportPdf: () -> Unit,
-    onSharePdf: (CutListPdfExportResult) -> Unit,
-    onDismissPdfResult: () -> Unit,
+    onSharePdf: (CutListPdfExportResult) -> Unit = {},
+    onDismissPdfResult: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
+    val checkedCount = cutListState.checkedGroupIds.size
+    val checkedPieces = remember(cutListState.entries, cutListState.checkedGroupIds) {
+        cutListState.entries
+            .filter { it.groupId in cutListState.checkedGroupIds }
+            .sumOf { it.quantity }
+    }
+    val allChecked = cutListState.entries.isNotEmpty() && checkedCount == cutListState.entries.size
 
     LaunchedEffect(cutListState.selectedGroupId, cutListState.entries) {
         val selectedId = cutListState.selectedGroupId ?: return@LaunchedEffect
@@ -104,7 +128,7 @@ fun CutListPanel(
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("cutlist_panel")
     ) {
-        // Header: Title + Count + Unit toggle + Export PDF + Optional Close
+        // Header: Title + Selection status + Export PDF (only enabled when parts are selected) + Optional Close
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -119,33 +143,34 @@ fun CutListPanel(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${cutListState.entries.size} types · ${cutListState.totalPieces} pcs",
+                    text = if (checkedCount > 0) {
+                        "$checkedCount of ${cutListState.entries.size} selected · $checkedPieces pcs"
+                    } else {
+                        "Select parts to export · ${cutListState.entries.size} types"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (checkedCount > 0) {
+                        CutHighlightOrange
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
 
-            OutlinedButton(
-                onClick = onOpenUnitDialog,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                modifier = Modifier
-                    .defaultMinSize(minWidth = 1.dp, minHeight = 36.dp)
-                    .heightIn(min = 40.dp)
-                    .testTag("cutlist_unit_button")
-            ) {
-                Text(unitSystem.symbol, style = CadNumericStyle, maxLines = 1)
-            }
+            val canExport = !cutListState.isExportingPdf &&
+                !cutListState.isLoading &&
+                checkedCount > 0
 
             Button(
                 onClick = onExportPdf,
-                enabled = !cutListState.isExportingPdf && !cutListState.isLoading,
+                enabled = canExport,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = CutHighlightOrange,
                     contentColor = Color.White
                 ),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 modifier = Modifier
                     .defaultMinSize(minWidth = 1.dp, minHeight = 36.dp)
                     .heightIn(min = 40.dp)
@@ -166,7 +191,11 @@ fun CutListPanel(
                 }
                 Spacer(Modifier.width(5.dp))
                 Text(
-                    text = if (cutListState.isExportingPdf) "Saving…" else "Export PDF",
+                    text = when {
+                        cutListState.isExportingPdf -> "Saving…"
+                        checkedCount > 0 -> "Export ($checkedCount)"
+                        else -> "Export PDF"
+                    },
                     maxLines = 1,
                     softWrap = false
                 )
@@ -178,6 +207,81 @@ fun CutListPanel(
                     modifier = Modifier.testTag("cutlist_close_button")
                 ) {
                     Icon(Icons.Default.Close, contentDescription = "Close Cut List")
+                }
+            }
+        }
+
+        // Always-available Selection Controls Bar (only selected items can be exported)
+        if (cutListState.entries.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (checkedCount > 0) {
+                    CutHighlightOrange.copy(alpha = 0.12f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                },
+                border = BorderStroke(
+                    1.dp,
+                    if (checkedCount > 0) CutHighlightOrange.copy(alpha = 0.45f)
+                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .testTag("cutlist_selection_bar")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckBox,
+                        contentDescription = null,
+                        tint = if (checkedCount > 0) CutHighlightOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (checkedCount > 0) {
+                            "$checkedCount selected for PDF"
+                        } else {
+                            "Check parts to export"
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (checkedCount > 0) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (checkedCount > 0) CutHighlightOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = onToggleSelectAll,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .defaultMinSize(minWidth = 1.dp, minHeight = 32.dp)
+                            .testTag("cutlist_select_all_button")
+                    ) {
+                        Text(
+                            text = if (allChecked) "Clear All" else "Select All",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    if (checkedCount > 0) {
+                        TextButton(
+                            onClick = onExitSelectionMode,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .defaultMinSize(minWidth = 1.dp, minHeight = 32.dp)
+                                .testTag("cutlist_exit_selection_button")
+                        ) {
+                            Text(
+                                text = "Clear",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -219,53 +323,7 @@ fun CutListPanel(
             }
         }
 
-        // Export Confirmation Banner (Downloads + Share Sheet)
-        AnimatedVisibility(visible = cutListState.lastExportedPdf != null) {
-            cutListState.lastExportedPdf?.let { exported ->
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    border = BorderStroke(1.dp, CutHighlightOrange.copy(alpha = 0.5f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp)
-                        .testTag("cutlist_pdf_ready_banner")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Saved: ${exported.savedLocationLabel}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = { onSharePdf(exported) },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .heightIn(min = 36.dp)
-                                .testTag("cutlist_share_pdf_button")
-                        ) {
-                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Share")
-                        }
-                        IconButton(
-                            onClick = onDismissPdfResult,
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss PDF notice", modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
-            }
-        }
+        // Error notice if extraction or export fails
 
         cutListState.errorMessage?.let { err ->
             Spacer(Modifier.height(6.dp))
@@ -457,7 +515,10 @@ fun CutListPanel(
                             unitSystem = unitSystem,
                             precisionDecimals = precisionDecimals,
                             isSelected = cutListState.selectedGroupId == entry.groupId,
-                            onClick = { onSelectRow(entry.groupId) }
+                            isChecked = entry.groupId in cutListState.checkedGroupIds,
+                            onClick = { onSelectRow(entry.groupId) },
+                            onLongClick = { onLongPressRow(entry.groupId) },
+                            onCheckedChange = { onToggleCheck(entry.groupId) }
                         )
                     }
                 }
@@ -466,14 +527,20 @@ fun CutListPanel(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CutListRowItem(
     entry: CutListEntry,
     unitSystem: UnitSystem,
     precisionDecimals: Int,
     isSelected: Boolean,
-    onClick: () -> Unit
+    isChecked: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onCheckedChange: () -> Unit
 ) {
+    val haptics = LocalHapticFeedback.current
+    val isActiveHighlight = isChecked || isSelected
     val swatchColor = Color(
         red = entry.primaryColor.r.coerceIn(0f, 1f),
         green = entry.primaryColor.g.coerceIn(0f, 1f),
@@ -482,12 +549,12 @@ private fun CutListRowItem(
     )
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = if (isSelected) {
+        color = if (isActiveHighlight) {
             CutHighlightOrange.copy(alpha = 0.14f)
         } else {
             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         },
-        border = if (isSelected) {
+        border = if (isActiveHighlight) {
             BorderStroke(1.5.dp, CutHighlightOrange)
         } else {
             BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
@@ -496,8 +563,14 @@ private fun CutListRowItem(
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .semantics { selected = isSelected }
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                }
+            )
+            .semantics { selected = isActiveHighlight }
             .testTag("cutlist_row_${entry.groupId}")
     ) {
         Row(
@@ -506,6 +579,19 @@ private fun CutListRowItem(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Checkbox(
+                checked = isChecked,
+                onCheckedChange = { onCheckedChange() },
+                colors = CheckboxDefaults.colors(
+                    checkedColor = CutHighlightOrange,
+                    checkmarkColor = Color.White
+                ),
+                modifier = Modifier
+                    .size(24.dp)
+                    .testTag("cutlist_checkbox_${entry.groupId}")
+            )
+            Spacer(Modifier.width(8.dp))
+
             Row(
                 modifier = Modifier.weight(0.36f),
                 verticalAlignment = Alignment.CenterVertically,
@@ -521,14 +607,14 @@ private fun CutListRowItem(
                     Text(
                         text = entry.partName,
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontWeight = if (isActiveHighlight) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "#${entry.partNumber}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isSelected) CutHighlightOrange else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (isActiveHighlight) CutHighlightOrange else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -549,18 +635,150 @@ private fun CutListRowItem(
             ) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = if (isSelected) CutHighlightOrange else MaterialTheme.colorScheme.primaryContainer
+                    color = if (isActiveHighlight) CutHighlightOrange else MaterialTheme.colorScheme.primaryContainer
                 ) {
                     Text(
                         text = "×${entry.quantity}",
                         style = CadNumericStyle,
                         fontWeight = FontWeight.Bold,
-                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.onPrimaryContainer,
+                        color = if (isActiveHighlight) Color.White else MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+fun PdfExportToastBanner(
+    exported: CutListPdfExportResult,
+    onOpenPdf: (CutListPdfExportResult) -> Unit,
+    onSharePdf: (CutListPdfExportResult) -> Unit,
+    onDismiss: () -> Unit,
+    autoDismissMillis: Int = 5000,
+    modifier: Modifier = Modifier
+) {
+    val remainingProgress = remember(exported.fileName, exported.shareUri) { Animatable(1f) }
+
+    LaunchedEffect(exported.fileName, exported.shareUri, autoDismissMillis) {
+        remainingProgress.snapTo(1f)
+        remainingProgress.animateTo(
+            targetValue = 0f,
+            animationSpec = tween(durationMillis = autoDismissMillis, easing = LinearEasing)
+        )
+        onDismiss()
+    }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
+        border = BorderStroke(1.dp, CutHighlightOrange.copy(alpha = 0.55f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("cutlist_pdf_ready_banner")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PictureAsPdf,
+                    contentDescription = null,
+                    tint = CutHighlightOrange,
+                    modifier = Modifier.size(20.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "PDF saved",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = exported.savedLocationLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                FilledTonalButton(
+                    onClick = { onOpenPdf(exported) },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 1.dp, minHeight = 36.dp)
+                        .heightIn(min = 38.dp)
+                        .testTag("cutlist_open_pdf_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Open", maxLines = 1, softWrap = false)
+                }
+                IconButton(
+                    onClick = { onSharePdf(exported) },
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("cutlist_share_pdf_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "Share PDF",
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("cutlist_dismiss_pdf_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss PDF notice",
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            LinearProgressIndicator(
+                progress = { remainingProgress.value.coerceIn(0f, 1f) },
+                color = CutHighlightOrange,
+                trackColor = CutHighlightOrange.copy(alpha = 0.16f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .testTag("cutlist_pdf_countdown_bar")
+            )
+        }
+    }
+}
+
+fun launchOpenPdf(context: Context, exported: CutListPdfExportResult): Boolean {
+    val targetUri = exported.shareUri
+    val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(targetUri, "application/pdf")
+        clipData = ClipData.newRawUri("Cut List PDF", targetUri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return try {
+        val chooser = Intent.createChooser(viewIntent, "Open Cut List PDF").apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+        true
+    } catch (_: Throwable) {
+        false
     }
 }
 

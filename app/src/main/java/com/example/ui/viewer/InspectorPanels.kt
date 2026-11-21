@@ -219,8 +219,8 @@ fun MeasurementsAndAnglesPanel(
     angles: List<AngleMeasurementEntity>,
     countedAngles: List<CountedAngleEntity>,
     angleBuckets: List<AngleBucketSummary>,
-    onChangeUnits: (UnitSystem) -> Unit,
-    onChangeDecimals: (Int) -> Unit,
+    onChangeUnits: (UnitSystem) -> Unit = {},
+    onChangeDecimals: (Int) -> Unit = {},
     onChangeTolerance: (Double) -> Unit,
     onFocusPoint: (Vec3) -> Unit,
     onRenameLength: (LengthMeasurementEntity, String) -> Unit,
@@ -255,39 +255,7 @@ fun MeasurementsAndAnglesPanel(
             }
         }
 
-        // Unit & Precision Strip
-        Column(
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.padding(vertical = 6.dp)
-        ) {
-            Text(
-                text = "Display Units & Precision",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                UnitSystem.entries.forEach { u ->
-                    FilterChip(
-                        selected = preferences.unitSystem == u,
-                        onClick = { onChangeUnits(u) },
-                        label = { Text(u.symbol, style = CadNumericStyle) },
-                        modifier = Modifier.testTag("unit_chip_${u.symbol}")
-                    )
-                }
-                listOf(0, 1, 2, 3).forEach { dec ->
-                    val label = if (dec == 0) "0" else ".${"0".repeat(dec)}"
-                    FilterChip(
-                        selected = preferences.precisionDecimals == dec,
-                        onClick = { onChangeDecimals(dec) },
-                        label = { Text(label, style = CadNumericStyle) },
-                        modifier = Modifier.testTag("precision_chip_$dec")
-                    )
-                }
-            }
-        }
+        Spacer(Modifier.height(8.dp))
 
         PrimaryTabRow(selectedTabIndex = tabIdx) {
             Tab(

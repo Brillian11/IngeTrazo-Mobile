@@ -2,10 +2,14 @@ package com.example.ui.ar
 
 import android.graphics.Bitmap
 import android.media.Image
+import android.opengl.Matrix
 import com.example.domain.math.BoundingBox3D
+import com.example.domain.math.Ray3D
+import com.example.domain.math.SnapEngine
 import com.example.domain.math.Vec2
 import com.example.domain.math.Vec3
 import com.example.domain.model.CadDocument
+import com.example.domain.model.SnapType
 import com.example.domain.model.UnitSystem
 import java.nio.ByteBuffer
 import java.util.Locale
@@ -23,9 +27,308 @@ enum class ArTrackingMode(val label: String, val subtitle: String) {
 }
 
 enum class ArAnchorOrigin(val label: String) {
+    MODEL_DOT("Model Dot"),
     AXIS("Axis"),
     BASE("Base"),
     CENTER("Center")
+}
+
+/**
+ * Two-step Move Tool interaction mode in AR view, modeled after the Move tool in IngeTrazo Desktop:
+ * 1. [PICK_DOT_ON_MODEL]: Tap a vertex, midpoint, edge, or face on the 3D model to place the tracking dot.
+ * 2. [MOVE_IN_WORLD]: Tap any real-world point to move the model so that its tracking dot sits at that exact spot.
+ */
+enum class ArTapActionMode(val label: String, val subtitle: String) {
+    MOVE_IN_WORLD("Move in World", "Tap real-world surface/object to place the model's tracking dot there"),
+    PICK_DOT_ON_MODEL("Pick Dot on Model", "Tap any corner, edge, or face on the 3D model to set its tracking dot")
+}
+
+/**
+ * Represents a Move-tool reference dot placed on a specific 3D point of the CAD model.
+ */
+data class ArModelTrackingDot(
+    val point: Vec3,
+    val snapType: SnapType = SnapType.VERTEX,
+    val label: String = "Endpoint"
+)
+
+enum class ArTrackingDotPreset(val label: String) {
+    FRONT_LEFT_BASE("Front-L Base"),
+    FRONT_RIGHT_BASE("Front-R Base"),
+    BACK_LEFT_BASE("Back-L Base"),
+    BACK_RIGHT_BASE("Back-R Base"),
+    BASE_CENTER("Base Center"),
+    AXIS_ORIGIN("Axis (0,0,0)"),
+    MODEL_CENTER("Center"),
+    TOP_CENTER("Top Center")
+}
+
+/**
+ * Geometry, projection, raycasting, and world-offset math for the IngeTrazo Move-tool
+ * Tracking Dot in AR view.
+ */
+object ArTrackingDotMath {
+
+    fun defaultTrackingDot(
+        document: CadDocument,
+        bounds: BoundingBox3D = document.bounds
+    ): ArModelTrackingDot {
+        if (!bounds.isValid) {
+            return ArModelTrackingDot(Vec3.ZERO, SnapType.VERTEX, "Axis (0,0,0)")
+        }
+        return ArModelTrackingDot(
+            point = Vec3.ZERO,
+            snapType = SnapType.VERTEX,
+            label = "Axis (0,0,0)"
+        )
+    }
+
+    /**
+     * Resolves the CAD-space point on the model that must lock onto the real-world AR anchor point.
+     */
+    fun resolveAlignmentPoint(
+        anchorOrigin: ArAnchorOrigin,
+        bounds: BoundingBox3D,
+        trackingDot: ArModelTrackingDot?
+    ): Vec3 {
+        return when (anchorOrigin) {
+            ArAnchorOrigin.MODEL_DOT -> trackingDot?.point ?: Vec3.ZERO
+            ArAnchorOrigin.AXIS -> Vec3.ZERO
+            ArAnchorOrigin.BASE -> if (bounds.isValid) {
+                Vec3(bounds.center.x, bounds.center.y, bounds.min.z)
+            } else {
+                Vec3.ZERO
+            }
+            ArAnchorOrigin.CENTER -> if (bounds.isValid) bounds.center else Vec3.ZERO
+        }
+    }
+
+    /**
+     * Resolves a quick corner/base preset to a concrete [ArModelTrackingDot] on the model.
+     * For corner presets, snaps to the nearest actual vertex of the model if one lies near the corner.
+     */
+    fun resolvePresetDot(
+        document: CadDocument,
+        bounds: BoundingBox3D = document.bounds,
+        preset: ArTrackingDotPreset
+    ): ArModelTrackingDot {
+        if (!bounds.isValid) {
+            return ArModelTrackingDot(Vec3.ZERO, SnapType.VERTEX, preset.label)
+        }
+        val target = when (preset) {
+            ArTrackingDotPreset.AXIS_ORIGIN -> return ArModelTrackingDot(Vec3.ZERO, SnapType.VERTEX, preset.label)
+            ArTrackingDotPreset.BASE_CENTER -> return ArModelTrackingDot(
+                Vec3(bounds.center.x, bounds.center.y, bounds.min.z),
+                SnapType.MIDPOINT,
+                preset.label
+            )
+            ArTrackingDotPreset.MODEL_CENTER -> return ArModelTrackingDot(
+                bounds.center,
+                SnapType.FACE,
+                preset.label
+            )
+            ArTrackingDotPreset.TOP_CENTER -> return ArModelTrackingDot(
+                Vec3(bounds.center.x, bounds.center.y, bounds.max.z),
+                SnapType.MIDPOINT,
+                preset.label
+            )
+            ArTrackingDotPreset.FRONT_LEFT_BASE -> Vec3(bounds.min.x, bounds.min.y, bounds.min.z)
+            ArTrackingDotPreset.FRONT_RIGHT_BASE -> Vec3(bounds.max.x, bounds.min.y, bounds.min.z)
+            ArTrackingDotPreset.BACK_LEFT_BASE -> Vec3(bounds.min.x, bounds.max.y, bounds.min.z)
+            ArTrackingDotPreset.BACK_RIGHT_BASE -> Vec3(bounds.max.x, bounds.max.y, bounds.min.z)
+        }
+
+        // Try to snap to the closest actual model vertex near the bounding box corner
+        val maxSnapDist = max(bounds.diagonal * 0.20, 0.05)
+        var bestVertex: Vec3? = null
+        var bestDist = maxSnapDist
+
+        for (edge in document.edges) {
+            if (edge.hidden) continue
+            val da = edge.a.distanceTo(target)
+            if (da < bestDist) {
+                bestDist = da
+                bestVertex = edge.a
+            }
+            val db = edge.b.distanceTo(target)
+            if (db < bestDist) {
+                bestDist = db
+                bestVertex = edge.b
+            }
+        }
+        if (bestVertex == null) {
+            for (face in document.faces) {
+                if (face.hidden) continue
+                for (pt in face.outerLoop) {
+                    val d = pt.distanceTo(target)
+                    if (d < bestDist) {
+                        bestDist = d
+                        bestVertex = pt
+                    }
+                }
+            }
+        }
+
+        return ArModelTrackingDot(
+            point = bestVertex ?: target,
+            snapType = SnapType.VERTEX,
+            label = preset.label
+        )
+    }
+
+    /**
+     * Projects a CAD model-space 3D point [point] through a 16-float column-major [mvpMatrix]
+     * into 2D screen pixel coordinates within [viewportWidth] x [viewportHeight].
+     */
+    fun projectModelPointToScreen(
+        point: Vec3,
+        mvpMatrix: FloatArray,
+        viewportWidth: Int,
+        viewportHeight: Int
+    ): Vec2? {
+        if (mvpMatrix.size < 16 || viewportWidth <= 0 || viewportHeight <= 0) return null
+        val x = point.x.toFloat()
+        val y = point.y.toFloat()
+        val z = point.z.toFloat()
+
+        val cx = mvpMatrix[0] * x + mvpMatrix[4] * y + mvpMatrix[8] * z + mvpMatrix[12]
+        val cy = mvpMatrix[1] * x + mvpMatrix[5] * y + mvpMatrix[9] * z + mvpMatrix[13]
+        val cw = mvpMatrix[3] * x + mvpMatrix[7] * y + mvpMatrix[11] * z + mvpMatrix[15]
+        if (cw <= 1e-4f) return null
+
+        val ndcX = cx / cw
+        val ndcY = cy / cw
+        if (ndcX < -1.25f || ndcX > 1.25f || ndcY < -1.25f || ndcY > 1.25f) return null
+
+        val sx = (ndcX + 1.0f) * 0.5f * viewportWidth.toFloat()
+        val sy = (1.0f - ndcY) * 0.5f * viewportHeight.toFloat()
+        return Vec2(sx.toDouble(), sy.toDouble())
+    }
+
+    /**
+     * Unprojects a 2D screen tap `(screenX, screenY)` through the inverse of [mvpMatrix]
+     * to produce a [Ray3D] directly in CAD Z-up model coordinates.
+     */
+    fun rayFromScreenInModelSpace(
+        screenX: Float,
+        screenY: Float,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        mvpMatrix: FloatArray
+    ): Ray3D? {
+        if (mvpMatrix.size < 16 || viewportWidth <= 0 || viewportHeight <= 0) return null
+        val invMvp = FloatArray(16)
+        if (!Matrix.invertM(invMvp, 0, mvpMatrix, 0)) return null
+
+        val ndcX = (2.0f * screenX / viewportWidth.toFloat()) - 1.0f
+        val ndcY = 1.0f - (2.0f * screenY / viewportHeight.toFloat())
+
+        val nearPt = unprojectNdc(invMvp, ndcX, ndcY, -1.0f) ?: return null
+        val farPt = unprojectNdc(invMvp, ndcX, ndcY, 1.0f) ?: return null
+        val dir = (farPt - nearPt).normalized()
+        if (dir.lengthSquared() < 1e-9) return null
+        return Ray3D(nearPt, dir)
+    }
+
+    private fun unprojectNdc(invMvp: FloatArray, ndcX: Float, ndcY: Float, ndcZ: Float): Vec3? {
+        val rx = invMvp[0] * ndcX + invMvp[4] * ndcY + invMvp[8] * ndcZ + invMvp[12]
+        val ry = invMvp[1] * ndcX + invMvp[5] * ndcY + invMvp[9] * ndcZ + invMvp[13]
+        val rz = invMvp[2] * ndcX + invMvp[6] * ndcY + invMvp[10] * ndcZ + invMvp[14]
+        val rw = invMvp[3] * ndcX + invMvp[7] * ndcY + invMvp[11] * ndcZ + invMvp[15]
+        if (abs(rw) < 1e-7f) return null
+        return Vec3((rx / rw).toDouble(), (ry / rw).toDouble(), (rz / rw).toDouble())
+    }
+
+    /**
+     * Picks and snaps a 3D Tracking Dot on the rendered CAD model in AR using CAD snapping
+     * priority (Endpoint/Vertex > Midpoint > On Edge > On Face).
+     */
+    fun pickDotOnRenderedArModel(
+        document: CadDocument,
+        mvpMatrix: FloatArray,
+        screenX: Float,
+        screenY: Float,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        showFoundation: Boolean = true,
+        snapRadiusPx: Double = 72.0
+    ): ArModelTrackingDot? {
+        val clipBelowZero = !showFoundation && ArGeometryClipper.hasFoundationBelowAxis(document.bounds)
+        val snap = SnapEngine.findBestSnap(
+            doc = document,
+            hiddenLayers = emptySet(),
+            hiddenNodes = emptySet(),
+            screenX = screenX,
+            screenY = screenY,
+            viewportWidth = viewportWidth,
+            viewportHeight = viewportHeight,
+            projectToScreen = { pt ->
+                if (clipBelowZero && pt.z < -1e-4) null
+                else projectModelPointToScreen(pt, mvpMatrix, viewportWidth, viewportHeight)
+            },
+            rayFromScreen = { sx, sy ->
+                rayFromScreenInModelSpace(sx, sy, viewportWidth, viewportHeight, mvpMatrix)
+            },
+            snapRadiusPx = snapRadiusPx
+        ) ?: return null
+
+        if (clipBelowZero && snap.point.z < -1e-4) return null
+        return ArModelTrackingDot(
+            point = snap.point,
+            snapType = snap.type,
+            label = snap.type.label
+        )
+    }
+
+    /**
+     * Transforms a CAD model-space point [point] through the 4x4 column-major [worldMatrix]
+     * into ARCore world coordinates `[wx, wy, wz]`.
+     */
+    fun transformModelPointToWorld(point: Vec3, worldMatrix: FloatArray): FloatArray {
+        require(worldMatrix.size >= 16) { "World matrix requires 16 floats" }
+        val x = point.x.toFloat()
+        val y = point.y.toFloat()
+        val z = point.z.toFloat()
+        val wx = worldMatrix[0] * x + worldMatrix[4] * y + worldMatrix[8] * z + worldMatrix[12]
+        val wy = worldMatrix[1] * x + worldMatrix[5] * y + worldMatrix[9] * z + worldMatrix[13]
+        val wz = worldMatrix[2] * x + worldMatrix[6] * y + worldMatrix[10] * z + worldMatrix[14]
+        return floatArrayOf(wx, wy, wz)
+    }
+
+    /**
+     * When the model is already placed in the real world and the user taps a new point [newAlign]
+     * on the model to move the Tracking Dot there, computes the updated world-space anchor offset
+     * `[shiftX, shiftY, shiftZ]` so the model remains stationary in place while the Tracking Dot
+     * moves onto [newAlign]—ready for the next tap in the real world to move [newAlign] to the destination.
+     */
+    fun computeStationaryWorldShiftForNewDot(
+        oldAlign: Vec3,
+        newAlign: Vec3,
+        currentWorldMatrix: FloatArray,
+        existingShift: FloatArray
+    ): FloatArray {
+        require(currentWorldMatrix.size >= 16) { "World matrix requires 16 floats" }
+        require(existingShift.size >= 3) { "Existing shift requires 3 floats" }
+        val oldWorld = transformModelPointToWorld(oldAlign, currentWorldMatrix)
+        val newWorld = transformModelPointToWorld(newAlign, currentWorldMatrix)
+        return floatArrayOf(
+            existingShift[0] + (newWorld[0] - oldWorld[0]),
+            existingShift[1] + (newWorld[1] - oldWorld[1]),
+            existingShift[2] + (newWorld[2] - oldWorld[2])
+        )
+    }
+
+    fun formatDotCoordinates(
+        point: Vec3,
+        unit: UnitSystem,
+        decimals: Int
+    ): String {
+        val dec = decimals.coerceIn(0, 4)
+        val x = String.format(Locale.US, "%.${dec}f", unit.fromMeters(point.x))
+        val y = String.format(Locale.US, "%.${dec}f", unit.fromMeters(point.y))
+        val z = String.format(Locale.US, "%.${dec}f", unit.fromMeters(point.z))
+        return "($x, $y, $z ${unit.symbol})"
+    }
 }
 
 enum class ObjectTrackingPhase {
@@ -168,6 +471,161 @@ object ArScaleMath {
         val d = String.format(Locale.US, "%.${dec}f", unit.fromMeters(dims.y))
         val h = String.format(Locale.US, "%.${dec}f", unit.fromMeters(dims.z))
         return "$w × $d × $h ${unit.symbol}"
+    }
+}
+
+/**
+ * Classifies ARCore hit-test trackable types by real-world metric depth accuracy.
+ * Metric planes provide exact real-world floor/surface distance so the model immediately renders
+ * at true scale on first placement instead of appearing smaller on a distant feature point.
+ */
+enum class ArHitKind(
+    val priority: Int,
+    val isExactMetricSurface: Boolean,
+    val defaultLabel: String
+) {
+    PLANE_IN_POLYGON(0, true, "Anchored to surface"),
+    PLANE_IN_EXTENTS(1, true, "Anchored to surface"),
+    PLANE_EXTENDED(2, true, "Anchored to extended surface"),
+    DEPTH_POINT(3, false, "Anchored to 3D Depth object"),
+    ORIENTED_POINT(4, false, "Anchored to 3D object feature"),
+    FEATURE_POINT(5, false, "Pinned to 3D feature point"),
+    INSTANT_PLACEMENT(6, false, "Pinned via instant placement")
+}
+
+data class ArHitCandidate<T>(
+    val payload: T,
+    val kind: ArHitKind,
+    val distanceMeters: Float,
+    val isFrontFacing: Boolean = true,
+    val isSubsumed: Boolean = false,
+    val planeEdgeDistanceMeters: Float = 0f,
+    val label: String = kind.defaultLabel
+)
+
+data class ArSelectedHit<T>(
+    val payload: T,
+    val kind: ArHitKind,
+    val distanceMeters: Float,
+    val label: String
+) {
+    val isExactMetricSurface: Boolean
+        get() = kind.isExactMetricSurface
+}
+
+/**
+ * Pure hit-test ranking & initial-placement depth refinement policy.
+ * Fixes the common ARCore issue where the first tap before a plane polygon expands skips the
+ * metric floor plane and hits a far-away background feature point (rendering the model too small
+ * until the user moves it later).
+ */
+object ArHitPlacementPolicy {
+    const val MIN_HIT_DISTANCE_METERS: Float = 0.15f
+    const val MAX_PLANE_POLYGON_DISTANCE_METERS: Float = 25.0f
+    const val MAX_PLANE_EXTENTS_DISTANCE_METERS: Float = 15.0f
+    const val MAX_PLANE_EXTENDED_DISTANCE_METERS: Float = 8.0f
+    const val MAX_PLANE_EXTENDED_OFFSET_METERS: Float = 3.5f
+    const val MAX_DEPTH_POINT_DISTANCE_METERS: Float = 5.0f
+    const val MAX_ORIENTED_POINT_DISTANCE_METERS: Float = 4.5f
+    const val MAX_FEATURE_POINT_DISTANCE_METERS: Float = 3.5f
+    const val MAX_INSTANT_PLACEMENT_DISTANCE_METERS: Float = 6.0f
+
+    fun isPlaneFrontFacing(
+        planeNormalX: Float,
+        planeNormalY: Float,
+        planeNormalZ: Float,
+        hitX: Float,
+        hitY: Float,
+        hitZ: Float,
+        cameraX: Float,
+        cameraY: Float,
+        cameraZ: Float
+    ): Boolean {
+        val vx = cameraX - hitX
+        val vy = cameraY - hitY
+        val vz = cameraZ - hitZ
+        val len = kotlin.math.sqrt(vx * vx + vy * vy + vz * vz)
+        if (!len.isFinite() || len < 1e-4f) return true
+        val dot = (planeNormalX * vx + planeNormalY * vy + planeNormalZ * vz) / len
+        return dot > 0.04f
+    }
+
+    fun <T> selectBestHit(candidates: List<ArHitCandidate<T>>): ArSelectedHit<T>? {
+        val valid = candidates.filter { c ->
+            if (!c.isFrontFacing || c.isSubsumed) return@filter false
+            val d = c.distanceMeters
+            if (!d.isFinite()) return@filter false
+            when (c.kind) {
+                ArHitKind.PLANE_IN_POLYGON -> d in MIN_HIT_DISTANCE_METERS..MAX_PLANE_POLYGON_DISTANCE_METERS
+                ArHitKind.PLANE_IN_EXTENTS -> d in MIN_HIT_DISTANCE_METERS..MAX_PLANE_EXTENTS_DISTANCE_METERS
+                ArHitKind.PLANE_EXTENDED -> d in 0.20f..MAX_PLANE_EXTENDED_DISTANCE_METERS &&
+                    c.planeEdgeDistanceMeters.isFinite() &&
+                    c.planeEdgeDistanceMeters <= MAX_PLANE_EXTENDED_OFFSET_METERS
+                ArHitKind.DEPTH_POINT -> d in 0.20f..MAX_DEPTH_POINT_DISTANCE_METERS
+                ArHitKind.ORIENTED_POINT -> d in 0.20f..MAX_ORIENTED_POINT_DISTANCE_METERS
+                ArHitKind.FEATURE_POINT -> d in 0.25f..MAX_FEATURE_POINT_DISTANCE_METERS
+                ArHitKind.INSTANT_PLACEMENT -> d in 0.25f..MAX_INSTANT_PLACEMENT_DISTANCE_METERS
+            }
+        }
+        if (valid.isEmpty()) return null
+
+        // Highest accuracy: inside tracked plane polygon or bounding extents (nearest wins ties)
+        val bestDirectPlane = valid
+            .filter { it.kind == ArHitKind.PLANE_IN_POLYGON || it.kind == ArHitKind.PLANE_IN_EXTENTS }
+            .minWithOrNull(compareBy<ArHitCandidate<T>> { it.kind.priority }.thenBy { it.distanceMeters })
+        if (bestDirectPlane != null) {
+            return ArSelectedHit(
+                payload = bestDirectPlane.payload,
+                kind = bestDirectPlane.kind,
+                distanceMeters = bestDirectPlane.distanceMeters,
+                label = bestDirectPlane.label
+            )
+        }
+
+        // Compare nearby plane extension vs close 3D depth object hit:
+        // Prefer a clearly closer close-range 3D object depth hit (e.g., table/prop in front of floor),
+        // otherwise prefer the metric floor/wall plane extension so scale is immediately exact.
+        val bestPlaneExt = valid
+            .filter { it.kind == ArHitKind.PLANE_EXTENDED }
+            .minByOrNull { it.distanceMeters }
+        val bestDepth = valid
+            .filter { it.kind == ArHitKind.DEPTH_POINT }
+            .minByOrNull { it.distanceMeters }
+
+        if (bestPlaneExt != null && bestDepth != null) {
+            val depthIsClearlyCloserObject = bestDepth.distanceMeters <= 2.5f &&
+                bestDepth.distanceMeters < bestPlaneExt.distanceMeters * 0.65f
+            val winner = if (depthIsClearlyCloserObject) bestDepth else bestPlaneExt
+            return ArSelectedHit(winner.payload, winner.kind, winner.distanceMeters, winner.label)
+        }
+        if (bestPlaneExt != null) {
+            return ArSelectedHit(bestPlaneExt.payload, bestPlaneExt.kind, bestPlaneExt.distanceMeters, bestPlaneExt.label)
+        }
+
+        // Remaining non-plane hits ranked by priority then closest distance
+        val fallback = valid.minWithOrNull(
+            compareBy<ArHitCandidate<T>> { it.kind.priority }.thenBy { it.distanceMeters }
+        ) ?: return null
+        return ArSelectedHit(fallback.payload, fallback.kind, fallback.distanceMeters, fallback.label)
+    }
+
+    /**
+     * Decides whether an initial approximate anchor (placed on a feature point, depth point, or
+     * instant-placement point before ARCore planes stabilized) should be upgraded to a newly
+     * detected metric [Plane] hit along the same visual ray.
+     */
+    fun shouldRefineApproximateAnchor(
+        currentDistanceMeters: Float,
+        candidatePlaneDistanceMeters: Float,
+        heightDeltaMeters: Float,
+        wasInstantPlacement: Boolean
+    ): Boolean {
+        if (!currentDistanceMeters.isFinite() || !candidatePlaneDistanceMeters.isFinite()) return false
+        if (candidatePlaneDistanceMeters !in 0.25f..MAX_PLANE_EXTENDED_DISTANCE_METERS) return false
+        if (wasInstantPlacement) return true
+        val distDiff = abs(candidatePlaneDistanceMeters - currentDistanceMeters)
+        val absHeightDiff = abs(heightDeltaMeters)
+        return distDiff >= 0.08f || absHeightDiff >= 0.03f
     }
 }
 

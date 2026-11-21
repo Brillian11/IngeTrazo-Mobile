@@ -149,6 +149,7 @@ fun ProjectHubScreen(
                     Text(
                         text = "IngeTrazo Mobile",
                         style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
@@ -160,12 +161,14 @@ fun ProjectHubScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
-                                contentDescription = "More options"
+                                contentDescription = "More options",
+                                tint = MaterialTheme.colorScheme.onBackground
                             )
                         }
                         DropdownMenu(
                             expanded = showOverflowMenu,
-                            onDismissRequest = { showOverflowMenu = false }
+                            onDismissRequest = { showOverflowMenu = false },
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
                             DropdownMenuItem(
                                 text = {
@@ -174,7 +177,8 @@ fun ProjectHubScreen(
                                 leadingIcon = {
                                     Icon(
                                         imageVector = if (preferences.darkCadMode) Icons.Default.DarkMode else Icons.Default.LightMode,
-                                        contentDescription = null
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 },
                                 trailingIcon = {
@@ -194,7 +198,8 @@ fun ProjectHubScreen(
                                 leadingIcon = {
                                     Icon(
                                         imageVector = Icons.Default.Straighten,
-                                        contentDescription = null
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 },
                                 trailingIcon = {
@@ -216,7 +221,8 @@ fun ProjectHubScreen(
                                 leadingIcon = {
                                     Icon(
                                         imageVector = Icons.Default.Info,
-                                        contentDescription = null
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 },
                                 onClick = {
@@ -274,7 +280,8 @@ fun ProjectHubScreen(
                 Column {
                     Text(
                         text = "Official IngeTrazo Sample Models",
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
                     Spacer(Modifier.height(12.dp))
                     LazyRow(
@@ -329,7 +336,8 @@ fun ProjectHubScreen(
             item {
                 Text(
                     text = "Recent Projects",
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground
                 )
             }
 
@@ -338,6 +346,7 @@ fun ProjectHubScreen(
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -507,6 +516,7 @@ fun ProjectHubScreen(
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -552,6 +562,7 @@ fun ProjectHubScreen(
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                             modifier = Modifier
                                 .fillMaxWidth()

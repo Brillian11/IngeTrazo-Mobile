@@ -1,9 +1,11 @@
 package com.example.ui.theme
 
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 
 private val LightDraftingColorScheme = lightColorScheme(
     primary = DraftCyanPrimary,
@@ -15,14 +17,26 @@ private val LightDraftingColorScheme = lightColorScheme(
     secondaryContainer = DraftSnapOrangeContainer,
     onSecondaryContainer = DraftInkPrimary,
     tertiary = DraftEmerald,
+    onTertiary = DraftSurface,
+    tertiaryContainer = DraftEmeraldContainer,
+    onTertiaryContainer = DraftOnEmeraldContainer,
     background = DraftCanvasBg,
     onBackground = DraftInkPrimary,
     surface = DraftSurface,
     onSurface = DraftInkPrimary,
     surfaceVariant = DraftSurfaceVariant,
     onSurfaceVariant = DraftInkSecondary,
+    surfaceContainerLowest = DraftSurface,
+    surfaceContainerLow = DraftSurfaceContainerLow,
+    surfaceContainer = DraftSurfaceContainer,
+    surfaceContainerHigh = DraftSurfaceContainerHigh,
+    surfaceContainerHighest = DraftSurfaceContainerHighest,
     outline = DraftOutline,
-    error = DraftError
+    outlineVariant = DraftSurfaceVariant,
+    error = DraftError,
+    onError = DraftSurface,
+    errorContainer = DraftErrorContainer,
+    onErrorContainer = DraftOnErrorContainer
 )
 
 private val DarkCadColorScheme = darkColorScheme(
@@ -35,14 +49,26 @@ private val DarkCadColorScheme = darkColorScheme(
     secondaryContainer = DarkCadSnapContainer,
     onSecondaryContainer = DarkCadInkPrimary,
     tertiary = DarkCadEmerald,
+    onTertiary = DarkCadBg,
+    tertiaryContainer = DarkCadEmeraldContainer,
+    onTertiaryContainer = DarkCadOnEmeraldContainer,
     background = DarkCadBg,
     onBackground = DarkCadInkPrimary,
     surface = DarkCadSurface,
     onSurface = DarkCadInkPrimary,
     surfaceVariant = DarkCadSurfaceVariant,
     onSurfaceVariant = DarkCadInkSecondary,
+    surfaceContainerLowest = DarkCadSurfaceContainerLowest,
+    surfaceContainerLow = DarkCadSurfaceContainerLow,
+    surfaceContainer = DarkCadSurfaceContainer,
+    surfaceContainerHigh = DarkCadSurfaceContainerHigh,
+    surfaceContainerHighest = DarkCadSurfaceContainerHighest,
     outline = DarkCadOutline,
-    error = DarkCadError
+    outlineVariant = DarkCadSurfaceVariant,
+    error = DarkCadError,
+    onError = DarkCadBg,
+    errorContainer = DarkCadErrorContainer,
+    onErrorContainer = DarkCadOnErrorContainer
 )
 
 @Composable
@@ -53,7 +79,10 @@ fun IngeTrazoTheme(
     val colorScheme = if (darkCadMode) DarkCadColorScheme else LightDraftingColorScheme
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = IngeTrazoTypography,
-        content = content
-    )
+        typography = IngeTrazoTypography
+    ) {
+        CompositionLocalProvider(LocalContentColor provides colorScheme.onBackground) {
+            content()
+        }
+    }
 }

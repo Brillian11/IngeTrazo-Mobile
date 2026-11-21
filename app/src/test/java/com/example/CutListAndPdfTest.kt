@@ -7,12 +7,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.export.CutListPdfExportResult
 import com.example.data.export.CutListPdfExporter
@@ -34,11 +40,13 @@ import com.example.domain.model.CadTool
 import com.example.domain.model.ModelFormat
 import com.example.domain.model.ModelStats
 import com.example.domain.model.UnitSystem
+import com.example.ui.CutListExportFilter
 import com.example.ui.CutListUiState
 import com.example.ui.ViewerUiState
 import com.example.ui.theme.IngeTrazoTheme
 import com.example.ui.viewer.CadViewerScreen
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -334,7 +342,27 @@ class CutListAndPdfTest {
                     onOpenCutList = { cutListOpened = true },
                     onSelectCutListRow = { gid, _ ->
                         selectedGroup = gid
-                        cutListUiState = cutListUiState.copy(selectedGroupId = gid)
+                        val next = if (gid in cutListUiState.checkedGroupIds) {
+                            cutListUiState.checkedGroupIds - gid
+                        } else {
+                            cutListUiState.checkedGroupIds + gid
+                        }
+                        cutListUiState = cutListUiState.copy(
+                            selectedGroupId = gid,
+                            isExportSelectionMode = next.isNotEmpty(),
+                            checkedGroupIds = next
+                        )
+                    },
+                    onToggleCutListCheck = { gid ->
+                        val next = if (gid in cutListUiState.checkedGroupIds) {
+                            cutListUiState.checkedGroupIds - gid
+                        } else {
+                            cutListUiState.checkedGroupIds + gid
+                        }
+                        cutListUiState = cutListUiState.copy(
+                            isExportSelectionMode = next.isNotEmpty(),
+                            checkedGroupIds = next
+                        )
                     },
                     onSetExplodeFraction = { frac ->
                         explodeFraction = frac
@@ -371,19 +399,26 @@ class CutListAndPdfTest {
         composeRule.onNodeWithTag("cutlist_panel").assertIsDisplayed()
         composeRule.onNodeWithText("1200 × 140 × 40 mm").assertIsDisplayed()
 
-        // Tap first row to highlight and trigger camera focus callback
+        // Export PDF is disabled until at least one part is selected
+        composeRule.onNodeWithTag("cutlist_export_pdf_button").assertIsNotEnabled()
+
+        // Tap first row to select & check it, enabling Export PDF
         val firstRowId = extracted.entries.first().groupId
         composeRule.onNodeWithTag("cutlist_row_$firstRowId").performClick()
         composeRule.waitForIdle()
         assertEquals(firstRowId, selectedGroup)
         composeRule.onNodeWithTag("cutlist_row_$firstRowId").assertIsSelected()
+        composeRule.onNodeWithTag("cutlist_checkbox_$firstRowId").assertIsDisplayed().assertIsOn()
+        composeRule.onNodeWithTag("cutlist_export_pdf_button").assertIsEnabled()
 
-        // Tap Export PDF and verify confirmation + Share CTA
+        // Tap Export PDF and verify unified confirmation banner with Open, Share & Countdown bar
         composeRule.onNodeWithTag("cutlist_export_pdf_button").performClick()
         composeRule.waitForIdle()
         assertTrue(exportTriggered)
         composeRule.onNodeWithTag("cutlist_pdf_ready_banner").assertIsDisplayed()
+        composeRule.onNodeWithTag("cutlist_open_pdf_button").assertIsDisplayed()
         composeRule.onNodeWithTag("cutlist_share_pdf_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("cutlist_pdf_countdown_bar").assertIsDisplayed()
 
         // Close split panel via Close button
         composeRule.onNodeWithTag("cutlist_close_button").performClick()
@@ -490,17 +525,249 @@ class CutListAndPdfTest {
         }
         composeRule.waitForIdle()
 
-        // Initially at scroll position 0, both top and bottom toolbars show right overflow arrows
-        composeRule.onNodeWithTag("top_toolbar_scroll_right").assertIsDisplayed()
+        // Top bar uses a clean three-dot overflow menu instead of horizontal scroll arrows; bottom dock still shows overflow scroll arrows
+        composeRule.onNodeWithTag("top_toolbar_scroll_right").assertDoesNotExist()
+        composeRule.onNodeWithTag("viewer_more_menu_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("tool_ar_dot").assertDoesNotExist()
         composeRule.onNodeWithTag("bottom_toolbar_scroll_right").assertIsDisplayed()
 
-        // Clicking right scroll arrows scrolls the toolbars and reveals the left scroll arrows
-        composeRule.onNodeWithTag("top_toolbar_scroll_right").performClick()
+        // Clicking bottom right scroll arrow reveals bottom left scroll arrow
         composeRule.onNodeWithTag("bottom_toolbar_scroll_right").performClick()
         composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag("top_toolbar_scroll_left").assertIsDisplayed()
         composeRule.onNodeWithTag("bottom_toolbar_scroll_left").assertIsDisplayed()
+
+        // Opening three-dot menu shows all top-bar actions cleanly
+        composeRule.onNodeWithTag("viewer_more_menu_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("viewer_ar_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("viewer_views_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("viewer_style_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("viewer_ortho_toggle").assertIsDisplayed()
+        composeRule.onNodeWithTag("viewer_theme_toggle").assertIsDisplayed()
+        composeRule.onNodeWithTag("viewer_landscape_toggle").assertIsDisplayed()
+        composeRule.onNodeWithTag("viewer_info_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `selective cut list export blocks empty selection, isolates selected nodes and bounds, and omits unchecked parts from pdf`() {
+        val doc = buildTestTimberDoc()
+        val extracted = CutListExtractor.extract(doc)
+        assertEquals(2, extracted.entries.size)
+
+        // Empty selection must NOT export everything
+        val (emptyEntries, emptyPieces) = CutListExportFilter.resolveEntriesForExport(
+            allEntries = extracted.entries,
+            isSelectionMode = false,
+            checkedGroupIds = emptySet()
+        )
+        assertTrue(emptyEntries.isEmpty())
+        assertEquals(0, emptyPieces)
+
+        // Selecting only Corner Post returns 1 entry renumbered to #1 and isolates only n_post for 3D render
+        val postEntry = extracted.entries.first { it.partName == "Corner Post" }
+        val (selectedEntries, selectedPieces) = CutListExportFilter.resolveEntriesForExport(
+            allEntries = extracted.entries,
+            isSelectionMode = true,
+            checkedGroupIds = setOf(postEntry.groupId)
+        )
+        assertEquals(1, selectedEntries.size)
+        assertEquals(1, selectedPieces)
+        assertEquals(1, selectedEntries.first().partNumber)
+        assertEquals("Corner Post", selectedEntries.first().partName)
+
+        val isolatedNodeIds = CutListExportFilter.collectSelectedNodeIds(selectedEntries)
+        assertEquals(setOf("n_post"), isolatedNodeIds)
+
+        // Isolated 3D bounds for PDF snapshot cover ONLY the Corner Post (0.10 x 0.10 x 0.80m), excluding Side Beams
+        val isolatedBounds = com.example.ui.viewer.gl.CadGlRenderer.computeIsolatedBounds(doc, isolatedNodeIds)
+        assertTrue(isolatedBounds.isValid)
+        assertEquals(0.10, isolatedBounds.size.x, 1e-3)
+        assertEquals(0.10, isolatedBounds.size.y, 1e-3)
+        assertEquals(0.80, isolatedBounds.size.z, 1e-3)
+        assertTrue(doc.bounds.size.x > 2.0)
+
+        // PDF generated from filtered entries + isolated bounds contains Corner Post and Selected Parts extents, omitting Side Beam
+        val pdfBytes = CutListPdfExporter.renderPdfBytes(
+            projectTitle = doc.title,
+            entries = selectedEntries,
+            totalPieces = selectedPieces,
+            modelBounds = isolatedBounds,
+            unitSystem = UnitSystem.MILLIMETERS,
+            precisionDecimals = 0,
+            explodeFraction = 0f,
+            viewportSnapshot = null,
+            selectedPartsOnly = true
+        )
+        val pdfText = String(pdfBytes, Charsets.ISO_8859_1)
+        assertTrue(pdfText.contains("Corner Post"))
+        assertTrue(pdfText.contains("Selected Parts Extents"))
+        assertFalse(pdfText.contains("Side Beam"))
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w411dp-h891dp-port")
+    fun `long press activates cut list checkmarks for selective pdf export and toast auto dismisses after 5s`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val doc = buildTestTimberDoc()
+        val extracted = CutListExtractor.extract(doc)
+        val firstId = extracted.entries[0].groupId
+        val secondId = extracted.entries[1].groupId
+
+        var cutListUiState by mutableStateOf(
+            CutListUiState(
+                entries = extracted.entries,
+                totalPieces = extracted.totalPieceCount
+            )
+        )
+
+        composeRule.setContent {
+            IngeTrazoTheme(darkCadMode = false) {
+                CadViewerScreen(
+                    document = doc,
+                    viewerState = ViewerUiState(),
+                    preferences = UserPreferences(unitSystem = UnitSystem.MILLIMETERS, precisionDecimals = 0),
+                    lengths = emptyList(),
+                    angles = emptyList(),
+                    countedAngles = emptyList(),
+                    angleBuckets = emptyList(),
+                    onBack = {},
+                    onOpenArMode = {},
+                    onSetTool = {},
+                    onSetAngleInputMode = {},
+                    onSetDisplayStyle = {},
+                    onToggleTheme = {},
+                    onToggleOrthographic = {},
+                    onApplyStandardView = { _, _ -> },
+                    onApplySavedView = { _, _ -> },
+                    onTapViewport = { _, _, _ -> },
+                    onSnapHover = { _, _, _ -> },
+                    onUndoPick = {},
+                    onClearPicks = {},
+                    onClearSelection = {},
+                    onToggleLayer = {},
+                    onToggleNode = {},
+                    onSelectNode = {},
+                    onShowAllHierarchy = {},
+                    onChangeUnits = {},
+                    onChangeDecimals = {},
+                    onChangeTolerance = {},
+                    onFocusPoint = { _, _ -> },
+                    onRenameLength = { _, _ -> },
+                    onDeleteLength = {},
+                    onRenameAngle = { _, _ -> },
+                    onDeleteAngle = {},
+                    onMarkAngleIntoCounter = {},
+                    onAutoCountSelection = {},
+                    onUpdateCountedNote = { _, _ -> },
+                    onDeleteCountedAngle = {},
+                    onClearCountedAngles = {},
+                    onExportCsv = {},
+                    onDismissBanner = {},
+                    cutListState = cutListUiState,
+                    onSelectCutListRow = { gid, _ ->
+                        val next = if (gid in cutListUiState.checkedGroupIds) {
+                            cutListUiState.checkedGroupIds - gid
+                        } else {
+                            cutListUiState.checkedGroupIds + gid
+                        }
+                        cutListUiState = cutListUiState.copy(
+                            isExportSelectionMode = next.isNotEmpty(),
+                            checkedGroupIds = next
+                        )
+                    },
+                    onLongPressCutListRow = { gid ->
+                        val next = cutListUiState.checkedGroupIds + gid
+                        cutListUiState = cutListUiState.copy(
+                            isExportSelectionMode = next.isNotEmpty(),
+                            checkedGroupIds = next
+                        )
+                    },
+                    onToggleCutListCheck = { gid ->
+                        val next = if (gid in cutListUiState.checkedGroupIds) {
+                            cutListUiState.checkedGroupIds - gid
+                        } else {
+                            cutListUiState.checkedGroupIds + gid
+                        }
+                        cutListUiState = cutListUiState.copy(
+                            isExportSelectionMode = next.isNotEmpty(),
+                            checkedGroupIds = next
+                        )
+                    },
+                    onToggleSelectAllCutList = {
+                        val allIds = cutListUiState.entries.map { it.groupId }.toSet()
+                        val next = if (cutListUiState.checkedGroupIds.size == allIds.size) emptySet() else allIds
+                        cutListUiState = cutListUiState.copy(
+                            isExportSelectionMode = next.isNotEmpty(),
+                            checkedGroupIds = next
+                        )
+                    },
+                    onExitCutListSelectionMode = {
+                        cutListUiState = cutListUiState.copy(
+                            isExportSelectionMode = false,
+                            checkedGroupIds = emptySet()
+                        )
+                    },
+                    onExportCutListPdf = {
+                        val uri = android.net.Uri.parse(
+                            "content://${context.packageName}.fileprovider/exports/selective.pdf"
+                        )
+                        cutListUiState = cutListUiState.copy(
+                            lastExportedPdf = CutListPdfExportResult(
+                                fileName = "Selected_CutList.pdf",
+                                savedLocationLabel = "Downloads/Selected_CutList.pdf",
+                                downloadsUri = uri,
+                                shareUri = uri
+                            )
+                        )
+                    },
+                    onDismissExportedPdf = {
+                        cutListUiState = cutListUiState.copy(lastExportedPdf = null)
+                    }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        // Open Cut List panel: checkboxes and selection bar are immediately visible, Export PDF is disabled until selected
+        composeRule.onNodeWithTag("tool_cutlist").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("cutlist_selection_bar").assertIsDisplayed()
+        composeRule.onNodeWithTag("cutlist_checkbox_$firstId").assertIsDisplayed().assertIsOff()
+        composeRule.onNodeWithTag("cutlist_checkbox_$secondId").assertIsDisplayed().assertIsOff()
+        composeRule.onNodeWithTag("cutlist_export_pdf_button").assertIsNotEnabled()
+
+        // Check first material -> enables Export (1)
+        composeRule.onNodeWithTag("cutlist_checkbox_$firstId").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("cutlist_checkbox_$firstId").assertIsOn()
+        composeRule.onNodeWithTag("cutlist_checkbox_$secondId").assertIsOff()
+        composeRule.onNodeWithTag("cutlist_export_pdf_button").assertIsEnabled()
+        composeRule.onNodeWithText("Export (1)").assertIsDisplayed()
+
+        // Tap second row to check it too -> Export (2)
+        composeRule.onNodeWithTag("cutlist_row_$secondId").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("cutlist_checkbox_$secondId").assertIsOn()
+        composeRule.onNodeWithText("Export (2)").assertIsDisplayed()
+
+        // Pause auto-advance before exporting so we can verify the 5s countdown + auto-dismiss
+        composeRule.mainClock.autoAdvance = false
+        composeRule.onNodeWithTag("cutlist_export_pdf_button").performClick()
+        composeRule.mainClock.advanceTimeBy(600L)
+
+        // Banner is shown with Open button + countdown loading bar
+        composeRule.onNodeWithTag("cutlist_pdf_ready_banner").assertIsDisplayed()
+        composeRule.onNodeWithTag("cutlist_open_pdf_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("cutlist_pdf_countdown_bar").assertIsDisplayed()
+
+        // Still visible at 2.6s
+        composeRule.mainClock.advanceTimeBy(2000L)
+        composeRule.onNodeWithTag("cutlist_pdf_ready_banner").assertIsDisplayed()
+
+        // Auto-dismisses after 5s total (+ exit animation)
+        composeRule.mainClock.advanceTimeBy(3400L)
+        composeRule.onNodeWithTag("cutlist_pdf_ready_banner").assertDoesNotExist()
     }
 }
+
 

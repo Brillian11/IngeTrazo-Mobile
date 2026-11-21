@@ -7,15 +7,380 @@ import android.opengl.GLUtils
 import com.example.data.local.AngleMeasurementEntity
 import com.example.data.local.LengthMeasurementEntity
 import com.example.domain.math.AngleMath
+import com.example.domain.math.BoundingBox3D
+import com.example.domain.math.Ray3D
+import com.example.domain.math.SnapEngine
 import com.example.domain.math.SnapHit
+import com.example.domain.math.Vec2
 import com.example.domain.math.Vec3
 import com.example.domain.model.CadDocument
+import com.example.domain.model.CadTool
 import com.example.domain.model.DisplayStyle
+import com.example.domain.model.SnapType
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
+import kotlin.math.hypot
+
+sealed interface LengthDotTarget {
+    data class SavedEndpoint(val lengthId: Long, val isStartA: Boolean) : LengthDotTarget
+    data class ActivePick(val index: Int) : LengthDotTarget
+}
+
+data class ActiveLengthDotDrag(
+    val target: LengthDotTarget,
+    val originalPoint: Vec3,
+    val currentPoint: Vec3,
+    val snapType: SnapType? = null
+)
+
+object LengthDotDragMath {
+
+    data class HitDot(
+        val target: LengthDotTarget,
+        val point: Vec3,
+        val screenPos: Vec2,
+        val distancePx: Double
+    )
+
+    fun findHitLengthDot(
+        screenX: Float,
+        screenY: Float,
+        savedLengths: List<LengthMeasurementEntity>,
+        activeLengthPicks: List<Vec3>,
+        projectToScreen: (Vec3) -> Vec2?,
+        hitRadiusPx: Double = 64.0
+    ): HitDot? {
+        var best: HitDot? = null
+        var bestDist = hitRadiusPx
+
+        fun checkCandidate(target: LengthDotTarget, pt: Vec3) {
+            val sp = projectToScreen(pt) ?: return
+            val dist = hypot(sp.x - screenX, sp.y - screenY)
+            if (dist <= bestDist) {
+                bestDist = dist
+                best = HitDot(target = target, point = pt, screenPos = sp, distancePx = dist)
+            }
+        }
+
+        // Prioritize active in-progress picks first when ties occur
+        for (i in activeLengthPicks.indices) {
+            checkCandidate(LengthDotTarget.ActivePick(i), activeLengthPicks[i])
+        }
+        for (len in savedLengths) {
+            checkCandidate(
+                LengthDotTarget.SavedEndpoint(len.id, isStartA = true),
+                Vec3(len.ax, len.ay, len.az)
+            )
+            checkCandidate(
+                LengthDotTarget.SavedEndpoint(len.id, isStartA = false),
+                Vec3(len.bx, len.by, len.bz)
+            )
+        }
+        return best
+    }
+
+    fun intersectRayWithPlane(ray: Ray3D, planeOrigin: Vec3, planeNormal: Vec3): Vec3? {
+        val denom = ray.direction.dot(planeNormal)
+        if (abs(denom) < 1e-6) return null
+        val t = (planeOrigin - ray.origin).dot(planeNormal) / denom
+        if (!t.isFinite() || t <= 0.0) return null
+        return ray.origin + ray.direction * t
+    }
+
+    fun resolveDraggedPoint(
+        doc: CadDocument,
+        hiddenLayers: Set<String>,
+        hiddenNodes: Set<String>,
+        screenX: Float,
+        screenY: Float,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        projectToScreen: (Vec3) -> Vec2?,
+        rayFromScreen: (Float, Float) -> Ray3D?,
+        cameraForward: Vec3,
+        planeOrigin: Vec3,
+        explodeOffsets: Map<String, Vec3> = emptyMap(),
+        snapRadiusPx: Double = 52.0
+    ): Pair<Vec3, SnapHit?>? {
+        val snap = SnapEngine.findBestSnap(
+            doc = doc,
+            hiddenLayers = hiddenLayers,
+            hiddenNodes = hiddenNodes,
+            screenX = screenX,
+            screenY = screenY,
+            viewportWidth = viewportWidth,
+            viewportHeight = viewportHeight,
+            projectToScreen = projectToScreen,
+            rayFromScreen = rayFromScreen,
+            snapRadiusPx = snapRadiusPx,
+            explodeOffsets = explodeOffsets
+        )
+        if (snap != null) {
+            return snap.point to snap
+        }
+        val ray = rayFromScreen(screenX, screenY) ?: return null
+        val fallbackPt = intersectRayWithPlane(ray, planeOrigin, cameraForward) ?: return null
+        return fallbackPt to null
+    }
+
+    fun effectiveSavedLengths(
+        savedLengths: List<LengthMeasurementEntity>,
+        activeDrag: ActiveLengthDotDrag?
+    ): List<LengthMeasurementEntity> {
+        val target = activeDrag?.target as? LengthDotTarget.SavedEndpoint ?: return savedLengths
+        return savedLengths.map { len ->
+            if (len.id != target.lengthId) {
+                len
+            } else {
+                val p = activeDrag.currentPoint
+                val a = if (target.isStartA) p else Vec3(len.ax, len.ay, len.az)
+                val b = if (target.isStartA) Vec3(len.bx, len.by, len.bz) else p
+                len.copy(
+                    ax = a.x, ay = a.y, az = a.z,
+                    bx = b.x, by = b.y, bz = b.z,
+                    lengthMeters = a.distanceTo(b)
+                )
+            }
+        }
+    }
+
+    fun effectiveActivePicks(
+        activeLengthPicks: List<Vec3>,
+        activeDrag: ActiveLengthDotDrag?
+    ): List<Vec3> {
+        val target = activeDrag?.target as? LengthDotTarget.ActivePick ?: return activeLengthPicks
+        if (target.index !in activeLengthPicks.indices) return activeLengthPicks
+        return activeLengthPicks.mapIndexed { idx, pt ->
+            if (idx == target.index) activeDrag.currentPoint else pt
+        }
+    }
+}
+
+enum class AnglePointRole {
+    VERTEX,
+    RAY_A,
+    RAY_B
+}
+
+sealed interface AngleDotTarget {
+    data class SavedPoint(val angleId: Long, val role: AnglePointRole) : AngleDotTarget
+    data class ActivePick(val index: Int) : AngleDotTarget
+}
+
+data class ActiveAngleDotDrag(
+    val target: AngleDotTarget,
+    val originalPoint: Vec3,
+    val currentPoint: Vec3,
+    val snapType: SnapType? = null
+)
+
+object AngleDotDragMath {
+
+    data class HitDot(
+        val target: AngleDotTarget,
+        val point: Vec3,
+        val screenPos: Vec2,
+        val distancePx: Double
+    )
+
+    fun findHitAngleDot(
+        screenX: Float,
+        screenY: Float,
+        savedAngles: List<AngleMeasurementEntity>,
+        activeAnglePicks: List<Vec3>,
+        projectToScreen: (Vec3) -> Vec2?,
+        hitRadiusPx: Double = 64.0
+    ): HitDot? {
+        var best: HitDot? = null
+        var bestDist = hitRadiusPx
+
+        fun checkCandidate(target: AngleDotTarget, pt: Vec3) {
+            val sp = projectToScreen(pt) ?: return
+            val dist = hypot(sp.x - screenX, sp.y - screenY)
+            if (dist <= bestDist) {
+                bestDist = dist
+                best = HitDot(target = target, point = pt, screenPos = sp, distancePx = dist)
+            }
+        }
+
+        for (i in activeAnglePicks.indices) {
+            checkCandidate(AngleDotTarget.ActivePick(i), activeAnglePicks[i])
+        }
+        for (ang in savedAngles) {
+            checkCandidate(
+                AngleDotTarget.SavedPoint(ang.id, AnglePointRole.VERTEX),
+                Vec3(ang.vx, ang.vy, ang.vz)
+            )
+            checkCandidate(
+                AngleDotTarget.SavedPoint(ang.id, AnglePointRole.RAY_A),
+                Vec3(ang.ax, ang.ay, ang.az)
+            )
+            checkCandidate(
+                AngleDotTarget.SavedPoint(ang.id, AnglePointRole.RAY_B),
+                Vec3(ang.bx, ang.by, ang.bz)
+            )
+        }
+        return best
+    }
+
+    fun effectiveSavedAngles(
+        savedAngles: List<AngleMeasurementEntity>,
+        activeDrag: ActiveAngleDotDrag?
+    ): List<AngleMeasurementEntity> {
+        val target = activeDrag?.target as? AngleDotTarget.SavedPoint ?: return savedAngles
+        return savedAngles.map { ang ->
+            if (ang.id != target.angleId) {
+                ang
+            } else {
+                val p = activeDrag.currentPoint
+                val vertex = if (target.role == AnglePointRole.VERTEX) p else Vec3(ang.vx, ang.vy, ang.vz)
+                val rayA = if (target.role == AnglePointRole.RAY_A) p else Vec3(ang.ax, ang.ay, ang.az)
+                val rayB = if (target.role == AnglePointRole.RAY_B) p else Vec3(ang.bx, ang.by, ang.bz)
+                val comp = AngleMath.computeThreePointAngle(rayA, vertex, rayB)
+                ang.copy(
+                    vx = vertex.x, vy = vertex.y, vz = vertex.z,
+                    ax = rayA.x, ay = rayA.y, az = rayA.z,
+                    bx = rayB.x, by = rayB.y, bz = rayB.z,
+                    angleDegrees = comp.degrees
+                )
+            }
+        }
+    }
+
+    fun effectiveActivePicks(
+        activeAnglePicks: List<Vec3>,
+        activeDrag: ActiveAngleDotDrag?
+    ): List<Vec3> {
+        val target = activeDrag?.target as? AngleDotTarget.ActivePick ?: return activeAnglePicks
+        if (target.index !in activeAnglePicks.indices) return activeAnglePicks
+        return activeAnglePicks.mapIndexed { idx, pt ->
+            if (idx == target.index) activeDrag.currentPoint else pt
+        }
+    }
+}
+
+sealed interface MeasurementContextTarget {
+    data class Length(val entity: LengthMeasurementEntity) : MeasurementContextTarget
+    data class Angle(val entity: AngleMeasurementEntity) : MeasurementContextTarget
+}
+
+object MeasurementHitMath {
+
+    data class HitMeasurement(
+        val target: MeasurementContextTarget,
+        val screenPos: Vec2,
+        val distancePx: Double
+    )
+
+    fun distanceToSegment2D(
+        px: Double,
+        py: Double,
+        ax: Double,
+        ay: Double,
+        bx: Double,
+        by: Double
+    ): Double {
+        val dx = bx - ax
+        val dy = by - ay
+        val lenSq = dx * dx + dy * dy
+        if (lenSq < 1e-8) return hypot(px - ax, py - ay)
+        val t = (((px - ax) * dx + (py - ay) * dy) / lenSq).coerceIn(0.0, 1.0)
+        val cx = ax + t * dx
+        val cy = ay + t * dy
+        return hypot(px - cx, py - cy)
+    }
+
+    fun findHitSavedMeasurement(
+        screenX: Float,
+        screenY: Float,
+        activeTool: CadTool,
+        savedLengths: List<LengthMeasurementEntity>,
+        savedAngles: List<AngleMeasurementEntity>,
+        projectToScreen: (Vec3) -> Vec2?,
+        hitRadiusPx: Double = 72.0
+    ): HitMeasurement? {
+        val sx = screenX.toDouble()
+        val sy = screenY.toDouble()
+
+        var bestLength: HitMeasurement? = null
+        var bestLengthDist = hitRadiusPx
+        for (len in savedLengths) {
+            val spA = projectToScreen(Vec3(len.ax, len.ay, len.az))
+            val spB = projectToScreen(Vec3(len.bx, len.by, len.bz))
+            val spMid = projectToScreen(
+                Vec3((len.ax + len.bx) * 0.5, (len.ay + len.by) * 0.5, (len.az + len.bz) * 0.5)
+            )
+            var minDist = Double.POSITIVE_INFINITY
+            if (spA != null && spB != null) {
+                minDist = minOf(minDist, distanceToSegment2D(sx, sy, spA.x, spA.y, spB.x, spB.y))
+            }
+            if (spA != null) minDist = minOf(minDist, hypot(sx - spA.x, sy - spA.y))
+            if (spB != null) minDist = minOf(minDist, hypot(sx - spB.x, sy - spB.y))
+            if (spMid != null) minDist = minOf(minDist, hypot(sx - spMid.x, sy - spMid.y))
+            if (minDist <= bestLengthDist) {
+                bestLengthDist = minDist
+                bestLength = HitMeasurement(
+                    target = MeasurementContextTarget.Length(len),
+                    screenPos = spMid ?: Vec2(sx, sy),
+                    distancePx = minDist
+                )
+            }
+        }
+
+        var bestAngle: HitMeasurement? = null
+        var bestAngleDist = hitRadiusPx
+        for (ang in savedAngles) {
+            val v = Vec3(ang.vx, ang.vy, ang.vz)
+            val a = Vec3(ang.ax, ang.ay, ang.az)
+            val b = Vec3(ang.bx, ang.by, ang.bz)
+            val spV = projectToScreen(v)
+            val spA = projectToScreen(a)
+            val spB = projectToScreen(b)
+            var minDist = Double.POSITIVE_INFINITY
+            if (spV != null && spA != null) {
+                minDist = minOf(minDist, distanceToSegment2D(sx, sy, spV.x, spV.y, spA.x, spA.y))
+            }
+            if (spV != null && spB != null) {
+                minDist = minOf(minDist, distanceToSegment2D(sx, sy, spV.x, spV.y, spB.x, spB.y))
+            }
+            if (spV != null) minDist = minOf(minDist, hypot(sx - spV.x, sy - spV.y))
+            if (spA != null) minDist = minOf(minDist, hypot(sx - spA.x, sy - spA.y))
+            if (spB != null) minDist = minOf(minDist, hypot(sx - spB.x, sy - spB.y))
+
+            val arcPts = AngleMath.buildAngleArc(v, a - v, b - v)
+            for (i in 0 until arcPts.size - 1) {
+                val p0 = projectToScreen(arcPts[i])
+                val p1 = projectToScreen(arcPts[i + 1])
+                if (p0 != null && p1 != null) {
+                    minDist = minOf(minDist, distanceToSegment2D(sx, sy, p0.x, p0.y, p1.x, p1.y))
+                }
+            }
+
+            if (minDist <= bestAngleDist) {
+                bestAngleDist = minDist
+                bestAngle = HitMeasurement(
+                    target = MeasurementContextTarget.Angle(ang),
+                    screenPos = spV ?: Vec2(sx, sy),
+                    distancePx = minDist
+                )
+            }
+        }
+
+        return when {
+            bestLength != null && bestAngle != null -> when (activeTool) {
+                CadTool.MEASURE_LENGTH -> if (bestLength.distancePx <= bestAngle.distancePx + 12.0) bestLength else bestAngle
+                CadTool.MEASURE_ANGLE -> if (bestAngle.distancePx <= bestLength.distancePx + 12.0) bestAngle else bestLength
+                else -> if (bestLength.distancePx <= bestAngle.distancePx) bestLength else bestAngle
+            }
+            bestLength != null -> bestLength
+            else -> bestAngle
+        }
+    }
+}
 
 data class OverlayRenderState(
     val selectedFaceIds: Set<String> = emptySet(),
@@ -30,14 +395,35 @@ data class OverlayRenderState(
     val activeLengthPicks: List<Vec3> = emptyList(),
     val activeAnglePicks: List<Vec3> = emptyList(),
     val activeSnap: SnapHit? = null,
+    val activeLengthDotDrag: ActiveLengthDotDrag? = null,
+    val activeAngleDotDrag: ActiveAngleDotDrag? = null,
+    val arTrackingDot: com.example.ui.ar.ArModelTrackingDot? = null,
     val savedLengths: List<LengthMeasurementEntity> = emptyList(),
-    val savedAngles: List<AngleMeasurementEntity> = emptyList()
+    val savedAngles: List<AngleMeasurementEntity> = emptyList(),
+    val isolatedNodeIds: Set<String>? = null
 )
 
 class CadGlRenderer(
     val camera: CadCamera,
-    private val onCameraMatrixUpdated: () -> Unit = {}
+    onCameraMatrixUpdated: () -> Unit = {}
 ) : GLSurfaceView.Renderer {
+
+    @Volatile
+    private var matrixUpdateListener: () -> Unit = onCameraMatrixUpdated
+
+    private var lastNotifiedMvp: FloatArray? = null
+
+    fun setOnCameraMatrixUpdated(listener: () -> Unit) {
+        matrixUpdateListener = listener
+    }
+
+    private fun notifyIfMatrixChanged(mvp: FloatArray) {
+        val prev = lastNotifiedMvp
+        if (prev == null || !prev.contentEquals(mvp)) {
+            lastNotifiedMvp = mvp.copyOf()
+            matrixUpdateListener()
+        }
+    }
 
     private var meshProgram = 0
     private var lineProgram = 0
@@ -72,8 +458,13 @@ class CadGlRenderer(
     @Volatile
     private var texturesDirty = false
 
+    private data class SnapshotRequest(
+        val isolatedNodeIds: Set<String>?,
+        val onCaptured: (Bitmap?) -> Unit
+    )
+
     @Volatile
-    private var pendingSnapshotCallback: ((Bitmap?) -> Unit)? = null
+    private var pendingSnapshotRequest: SnapshotRequest? = null
 
     private data class MeshBatch(
         val textureKey: String?,
@@ -97,8 +488,14 @@ class CadGlRenderer(
         geometryDirty = true
     }
 
-    fun requestSnapshot(onCaptured: (Bitmap?) -> Unit) {
-        pendingSnapshotCallback = onCaptured
+    fun requestSnapshot(
+        isolatedNodeIds: Set<String>? = null,
+        onCaptured: (Bitmap?) -> Unit
+    ) {
+        pendingSnapshotRequest = SnapshotRequest(
+            isolatedNodeIds = isolatedNodeIds?.takeIf { it.isNotEmpty() },
+            onCaptured = onCaptured
+        )
     }
 
     fun updateOverlayState(state: OverlayRenderState) {
@@ -110,7 +507,8 @@ class CadGlRenderer(
             prev.selectedNodeIds != state.selectedNodeIds ||
             prev.highlightedCutNodeIds != state.highlightedCutNodeIds ||
             prev.explodeOffsets != state.explodeOffsets ||
-            prev.displayStyle != state.displayStyle
+            prev.displayStyle != state.displayStyle ||
+            prev.isolatedNodeIds != state.isolatedNodeIds
         renderState = state
         if (needRebuild) {
             geometryDirty = true
@@ -143,8 +541,8 @@ class CadGlRenderer(
         glViewportW = width.coerceAtLeast(1)
         glViewportH = height.coerceAtLeast(1)
         GLES30.glViewport(0, 0, glViewportW, glViewportH)
-        camera.updateMatrices(glViewportW, glViewportH)
-        onCameraMatrixUpdated()
+        val mvp = camera.updateMatrices(glViewportW, glViewportH)
+        notifyIfMatrixChanged(mvp)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -161,13 +559,63 @@ class CadGlRenderer(
             uploadTextures(doc.textures)
             texturesDirty = false
         }
-        if (geometryDirty) {
+
+        // Handle isolated selected-parts snapshot BEFORE drawing the live viewport frame,
+        // then restore camera & batches so the user sees zero flicker on screen.
+        val snapReq = pendingSnapshotRequest
+        var capturedIsolatedSnap = false
+        if (snapReq != null && !snapReq.isolatedNodeIds.isNullOrEmpty() && doc != null) {
+            pendingSnapshotRequest = null
+            capturedIsolatedSnap = true
+            val isolatedState = state.copy(
+                isolatedNodeIds = snapReq.isolatedNodeIds,
+                highlightedCutNodeIds = emptySet(),
+                selectedFaceIds = emptySet(),
+                selectedEdgeIds = emptySet(),
+                selectedNodeIds = emptySet(),
+                savedLengths = emptyList(),
+                savedAngles = emptyList(),
+                activeLengthPicks = emptyList(),
+                activeAnglePicks = emptyList(),
+                activeSnap = null,
+                activeLengthDotDrag = null,
+                activeAngleDotDrag = null
+            )
+            rebuildGeometryBatches(doc, isolatedState)
+
+            val savedTarget = camera.target
+            val savedDistance = camera.distance
+            val isolatedBounds = computeIsolatedBounds(doc, snapReq.isolatedNodeIds, state.explodeOffsets)
+            if (isolatedBounds.isValid) {
+                camera.target = isolatedBounds.center
+                camera.distance = camera.targetDistanceForBounds(isolatedBounds, paddingFactor = 1.05)
+            }
+            val isolatedMvp = camera.updateMatrices(glViewportW, glViewportH)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+            drawGridAndAxes(isolatedMvp)
+            if (isolatedState.displayStyle != DisplayStyle.WIREFRAME) {
+                drawMeshBatches(isolatedMvp, isolatedState)
+            }
+            if (isolatedState.displayStyle != DisplayStyle.TEXTURED) {
+                drawEdges(isolatedMvp, isolatedState)
+            }
+            GLES30.glFinish()
+            val bmp = captureFramebufferBitmap(glViewportW, glViewportH)
+
+            // Restore live camera and geometry before rendering the visible frame
+            camera.target = savedTarget
+            camera.distance = savedDistance
+            rebuildGeometryBatches(doc, state)
+            geometryDirty = false
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+            snapReq.onCaptured(bmp)
+        } else if (geometryDirty) {
             rebuildGeometryBatches(doc, state)
             geometryDirty = false
         }
 
         val mvp = camera.updateMatrices(camera.viewportWidth, camera.viewportHeight)
-        onCameraMatrixUpdated()
+        notifyIfMatrixChanged(mvp)
 
         // 1. Draw Ground Reference Grid & RGB Axes
         drawGridAndAxes(mvp)
@@ -188,13 +636,15 @@ class CadGlRenderer(
         // 4. Draw Measurement Overlays & Active Snap Indicator (drawn on top with depth bias)
         drawMeasurementOverlays(mvp, state)
 
-        // 5. Capture live framebuffer screenshot if requested for PDF Export
-        val snapCb = pendingSnapshotCallback
-        if (snapCb != null) {
-            pendingSnapshotCallback = null
-            GLES30.glFinish()
-            val bmp = captureFramebufferBitmap(glViewportW, glViewportH)
-            snapCb(bmp)
+        // 5. Capture live framebuffer screenshot if full-viewport snapshot was requested
+        if (!capturedIsolatedSnap) {
+            val fullSnapReq = pendingSnapshotRequest
+            if (fullSnapReq != null) {
+                pendingSnapshotRequest = null
+                GLES30.glFinish()
+                val bmp = captureFramebufferBitmap(glViewportW, glViewportH)
+                fullSnapReq.onCaptured(bmp)
+            }
         }
     }
 
@@ -361,46 +811,65 @@ class CadGlRenderer(
             )
         }
 
-        // Saved lengths (blueprint cyan)
-        for (l in state.savedLengths) {
-            addLine(Vec3(l.ax, l.ay, l.az), Vec3(l.bx, l.by, l.bz), 0.01f, 0.52f, 0.78f)
+        // Saved lengths (blueprint cyan; highlighted orange while dragging an endpoint)
+        val draggedSavedTarget = state.activeLengthDotDrag?.target as? LengthDotTarget.SavedEndpoint
+        val effectiveLengths = LengthDotDragMath.effectiveSavedLengths(state.savedLengths, state.activeLengthDotDrag)
+        for (l in effectiveLengths) {
+            val isBeingEdited = draggedSavedTarget?.lengthId == l.id
+            if (isBeingEdited) {
+                addLine(Vec3(l.ax, l.ay, l.az), Vec3(l.bx, l.by, l.bz), 0.92f, 0.35f, 0.05f)
+            } else {
+                addLine(Vec3(l.ax, l.ay, l.az), Vec3(l.bx, l.by, l.bz), 0.01f, 0.52f, 0.78f)
+            }
         }
         // Active length rubber-band (precision orange)
-        if (state.activeLengthPicks.size == 1 && state.activeSnap != null) {
-            addLine(state.activeLengthPicks[0], state.activeSnap.point, 0.92f, 0.35f, 0.05f)
-        } else if (state.activeLengthPicks.size >= 2) {
-            addLine(state.activeLengthPicks[0], state.activeLengthPicks[1], 0.92f, 0.35f, 0.05f)
+        val effectivePicks = LengthDotDragMath.effectiveActivePicks(state.activeLengthPicks, state.activeLengthDotDrag)
+        val isDraggingActivePick = state.activeLengthDotDrag?.target is LengthDotTarget.ActivePick
+        if (effectivePicks.size == 1 && !isDraggingActivePick && state.activeSnap != null) {
+            addLine(effectivePicks[0], state.activeSnap.point, 0.92f, 0.35f, 0.05f)
+        } else if (effectivePicks.size >= 2) {
+            addLine(effectivePicks[0], effectivePicks[1], 0.92f, 0.35f, 0.05f)
         }
 
-        // Saved angles (emerald/amber arcs)
-        for (ang in state.savedAngles) {
+        // Saved angles (emerald green; highlighted precision orange while dragging any dot)
+        val draggedSavedAngleId = (state.activeAngleDotDrag?.target as? AngleDotTarget.SavedPoint)?.angleId
+        val effectiveAngles = AngleDotDragMath.effectiveSavedAngles(state.savedAngles, state.activeAngleDotDrag)
+        for (ang in effectiveAngles) {
             val v = Vec3(ang.vx, ang.vy, ang.vz)
             val a = Vec3(ang.ax, ang.ay, ang.az)
             val b = Vec3(ang.bx, ang.by, ang.bz)
-            addLine(v, a, 0.09f, 0.64f, 0.29f)
-            addLine(v, b, 0.09f, 0.64f, 0.29f)
+            val isEdited = draggedSavedAngleId == ang.id
+            val r = if (isEdited) 0.92f else 0.09f
+            val g = if (isEdited) 0.35f else 0.64f
+            val bl = if (isEdited) 0.05f else 0.29f
+            addLine(v, a, r, g, bl)
+            addLine(v, b, r, g, bl)
             val arc = AngleMath.buildAngleArc(v, a - v, b - v)
             for (i in 0 until arc.size - 1) {
-                addLine(arc[i], arc[i + 1], 0.09f, 0.64f, 0.29f)
+                addLine(arc[i], arc[i + 1], r, g, bl)
             }
         }
 
         // Active angle preview
-        if (state.activeAnglePicks.size == 2) {
-            val p1 = state.activeAnglePicks[0]
-            val apex = state.activeAnglePicks[1]
+        val effectiveAnglePicks = AngleDotDragMath.effectiveActivePicks(state.activeAnglePicks, state.activeAngleDotDrag)
+        val isDraggingAnglePick = state.activeAngleDotDrag?.target is AngleDotTarget.ActivePick
+        if (effectiveAnglePicks.size == 2) {
+            val p1 = effectiveAnglePicks[0]
+            val apex = effectiveAnglePicks[1]
             addLine(apex, p1, 0.92f, 0.35f, 0.05f)
-            state.activeSnap?.let { s ->
-                addLine(apex, s.point, 0.92f, 0.35f, 0.05f)
-                val arc = AngleMath.buildAngleArc(apex, p1 - apex, s.point - apex)
-                for (i in 0 until arc.size - 1) {
-                    addLine(arc[i], arc[i + 1], 0.92f, 0.35f, 0.05f)
+            if (!isDraggingAnglePick) {
+                state.activeSnap?.let { s ->
+                    addLine(apex, s.point, 0.92f, 0.35f, 0.05f)
+                    val arc = AngleMath.buildAngleArc(apex, p1 - apex, s.point - apex)
+                    for (i in 0 until arc.size - 1) {
+                        addLine(arc[i], arc[i + 1], 0.92f, 0.35f, 0.05f)
+                    }
                 }
             }
-        } else if (state.activeAnglePicks.size >= 3) {
-            val p1 = state.activeAnglePicks[0]
-            val apex = state.activeAnglePicks[1]
-            val p2 = state.activeAnglePicks[2]
+        } else if (effectiveAnglePicks.size >= 3) {
+            val p1 = effectiveAnglePicks[0]
+            val apex = effectiveAnglePicks[1]
+            val p2 = effectiveAnglePicks[2]
             addLine(apex, p1, 0.92f, 0.35f, 0.05f)
             addLine(apex, p2, 0.92f, 0.35f, 0.05f)
             val arc = AngleMath.buildAngleArc(apex, p1 - apex, p2 - apex)
@@ -462,7 +931,9 @@ class CadGlRenderer(
         val selVerts = FloatArrayBuilder(512)
         val cutVerts = FloatArrayBuilder(512)
 
+        val isolatedIds = state.isolatedNodeIds
         for (face in doc.faces) {
+            if (isolatedIds != null && face.nodeId !in isolatedIds) continue
             if (face.hidden || face.layer in state.hiddenLayers || face.nodeId in state.hiddenNodes) continue
             val isCutHighlighted = face.nodeId in state.highlightedCutNodeIds
             val isSelected = !isCutHighlighted &&
@@ -534,6 +1005,7 @@ class CadGlRenderer(
         val eb = if (state.darkCadMode) 0.96f else 0.23f
 
         for (edge in doc.edges) {
+            if (isolatedIds != null && edge.nodeId !in isolatedIds) continue
             if (edge.hidden || edge.soft || edge.layer in state.hiddenLayers || edge.nodeId in state.hiddenNodes) continue
             val isCutSel = edge.nodeId in state.highlightedCutNodeIds
             val isSel = !isCutSel && (edge.id in state.selectedEdgeIds || edge.nodeId in state.selectedNodeIds)
@@ -698,6 +1170,29 @@ class CadGlRenderer(
     }
 
     companion object {
+        fun computeIsolatedBounds(
+            doc: CadDocument,
+            isolatedNodeIds: Set<String>,
+            explodeOffsets: Map<String, Vec3> = emptyMap()
+        ): BoundingBox3D {
+            var bounds = BoundingBox3D.EMPTY
+            for (face in doc.faces) {
+                if (face.nodeId !in isolatedNodeIds || face.hidden) continue
+                val off = explodeOffsets[face.nodeId] ?: Vec3.ZERO
+                for (v in face.triangleVertices) {
+                    bounds = bounds.expand(v + off)
+                }
+            }
+            if (!bounds.isValid) {
+                for (edge in doc.edges) {
+                    if (edge.nodeId !in isolatedNodeIds || edge.hidden) continue
+                    val off = explodeOffsets[edge.nodeId] ?: Vec3.ZERO
+                    bounds = bounds.expand(edge.a + off).expand(edge.b + off)
+                }
+            }
+            return bounds
+        }
+
         private const val MESH_VERTEX_SHADER = """#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;

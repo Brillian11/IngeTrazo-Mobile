@@ -180,6 +180,9 @@ class CadRepository(
     suspend fun addLength(entity: LengthMeasurementEntity): Long =
         measurementDao.insertLength(entity)
 
+    suspend fun updateLength(entity: LengthMeasurementEntity) =
+        measurementDao.updateLength(entity)
+
     suspend fun updateLengthLabel(entity: LengthMeasurementEntity, newLabel: String) =
         measurementDao.updateLength(entity.copy(label = newLabel))
 
@@ -188,6 +191,9 @@ class CadRepository(
 
     suspend fun addAngle(entity: AngleMeasurementEntity): Long =
         measurementDao.insertAngle(entity)
+
+    suspend fun updateAngle(entity: AngleMeasurementEntity) =
+        measurementDao.updateAngle(entity)
 
     suspend fun updateAngleLabel(entity: AngleMeasurementEntity, newLabel: String) =
         measurementDao.updateAngle(entity.copy(label = newLabel))

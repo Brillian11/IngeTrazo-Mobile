@@ -49,7 +49,8 @@ object CutListPdfExporter {
         precisionDecimals: Int,
         explodeFraction: Float,
         viewportSnapshot: Bitmap?,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        selectedPartsOnly: Boolean = true
     ): CutListPdfExportResult {
         val safeBase = projectTitle.substringBeforeLast('.')
             .replace(Regex("""[^A-Za-z0-9_-]+"""), "_")
@@ -67,7 +68,8 @@ object CutListPdfExporter {
             precisionDecimals = precisionDecimals,
             explodeFraction = explodeFraction,
             viewportSnapshot = viewportSnapshot,
-            nowMillis = nowMillis
+            nowMillis = nowMillis,
+            selectedPartsOnly = selectedPartsOnly
         )
 
         // 1. Write shareable file inside FileProvider-exposed cache directory
@@ -106,7 +108,8 @@ object CutListPdfExporter {
         precisionDecimals: Int,
         explodeFraction: Float,
         viewportSnapshot: Bitmap?,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        selectedPartsOnly: Boolean = true
     ): ByteArray {
         var pdf: PdfDocument? = null
         return try {
@@ -119,7 +122,8 @@ object CutListPdfExporter {
                 precisionDecimals = precisionDecimals,
                 explodeFraction = explodeFraction,
                 viewportSnapshot = viewportSnapshot,
-                nowMillis = nowMillis
+                nowMillis = nowMillis,
+                selectedPartsOnly = selectedPartsOnly
             )
             ByteArrayOutputStream().use { baos ->
                 pdf.writeTo(baos)
@@ -135,7 +139,8 @@ object CutListPdfExporter {
                 precisionDecimals = precisionDecimals,
                 explodeFraction = explodeFraction,
                 viewportSnapshot = viewportSnapshot,
-                nowMillis = nowMillis
+                nowMillis = nowMillis,
+                selectedPartsOnly = selectedPartsOnly
             )
         } catch (_: UnsatisfiedLinkError) {
             renderPurePdf14Bytes(
@@ -147,7 +152,8 @@ object CutListPdfExporter {
                 precisionDecimals = precisionDecimals,
                 explodeFraction = explodeFraction,
                 viewportSnapshot = viewportSnapshot,
-                nowMillis = nowMillis
+                nowMillis = nowMillis,
+                selectedPartsOnly = selectedPartsOnly
             )
         } finally {
             runCatching { pdf?.close() }
@@ -163,7 +169,8 @@ object CutListPdfExporter {
         precisionDecimals: Int,
         explodeFraction: Float,
         viewportSnapshot: Bitmap?,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        selectedPartsOnly: Boolean = true
     ): PdfDocument {
         val pdf = PdfDocument()
         val dateText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(nowMillis))
@@ -276,12 +283,13 @@ object CutListPdfExporter {
         drawHeaderBar(canvas, continued = false)
         var y = 78f
 
-        // 2D Rendered Screenshot of current / exploded 3D View
+        // 2D Rendered Screenshot of selected parts (or exploded view)
         if (viewportSnapshot != null && viewportSnapshot.width > 0 && viewportSnapshot.height > 0) {
+            val basePreviewTitle = if (selectedPartsOnly) "3D Selected Parts Preview" else "3D Viewport Preview"
             val viewTitle = if (explodePct > 0) {
-                "3D Viewport Preview (Exploded View · $explodePct%)"
+                "$basePreviewTitle (Exploded View · $explodePct%)"
             } else {
-                "3D Viewport Preview"
+                basePreviewTitle
             }
             canvas.drawText(viewTitle, MARGIN, y + 10f, sectionTitlePaint)
             y += 16f
@@ -328,7 +336,8 @@ object CutListPdfExporter {
                 unitSystem.symbol
             )
         } else "—"
-        canvas.drawText("Overall Assembly Extents", MARGIN + colStep * 2f + 12f, y + 15f, summaryLabelPaint)
+        val extentsLabel = if (selectedPartsOnly) "Selected Parts Extents" else "Overall Assembly Extents"
+        canvas.drawText(extentsLabel, MARGIN + colStep * 2f + 12f, y + 15f, summaryLabelPaint)
         canvas.drawText(overallText, MARGIN + colStep * 2f + 12f, y + 31f, summaryValuePaint)
         y += 56f
 
@@ -427,7 +436,8 @@ object CutListPdfExporter {
         precisionDecimals: Int,
         explodeFraction: Float,
         viewportSnapshot: Bitmap?,
-        nowMillis: Long
+        nowMillis: Long,
+        selectedPartsOnly: Boolean = true
     ): ByteArray {
         val dateText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(nowMillis))
         val explodePct = (explodeFraction.coerceIn(0f, 1f) * 100f).roundToInt()
@@ -486,7 +496,8 @@ object CutListPdfExporter {
         var y = 78f
 
         if (jpegBytes != null && viewportSnapshot != null) {
-            val previewLabel = if (explodePct > 0) "3D Viewport Preview (Exploded $explodePct%)" else "3D Viewport Preview"
+            val baseLabel = if (selectedPartsOnly) "3D Selected Parts Preview" else "3D Viewport Preview"
+            val previewLabel = if (explodePct > 0) "$baseLabel (Exploded $explodePct%)" else baseLabel
             sb.append("0.059 0.090 0.165 rg BT /F2 11 Tf $MARGIN ${py(y + 10f)} Td (${pdfEsc(previewLabel)}) Tj ET\n")
             y += 16f
             val maxImgW = CONTENT_WIDTH - 8f
@@ -519,7 +530,8 @@ object CutListPdfExporter {
                 unitSystem.symbol
             )
         } else "-"
-        sb.append("0.278 0.333 0.412 rg BT /F1 8.5 Tf ${MARGIN + colStep * 2f + 12f} ${py(y + 15f)} Td (Assembly Extents) Tj ET\n")
+        val extentsLabel = if (selectedPartsOnly) "Selected Parts Extents" else "Assembly Extents"
+        sb.append("0.278 0.333 0.412 rg BT /F1 8.5 Tf ${MARGIN + colStep * 2f + 12f} ${py(y + 15f)} Td (${pdfEsc(extentsLabel)}) Tj ET\n")
         sb.append("0.059 0.090 0.165 rg BT /F3 10 Tf ${MARGIN + colStep * 2f + 12f} ${py(y + 31f)} Td (${pdfEsc(extentsText)}) Tj ET\n")
         y += 56f
 
@@ -594,9 +606,9 @@ object CutListPdfExporter {
         beginObj(f3Id)
         writeAscii("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n")
 
-        if (hasImage && jpegBytes != null && viewportSnapshot != null) {
+        if (hasImage) {
             beginObj(imgId)
-            writeAscii("<< /Type /XObject /Subtype /Image /Width ${viewportSnapshot.width} /Height ${viewportSnapshot.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.size} >>\nstream\n")
+            writeAscii("<< /Type /XObject /Subtype /Image /Width ${viewportSnapshot!!.width} /Height ${viewportSnapshot.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes!!.size} >>\nstream\n")
             out.write(jpegBytes)
             writeAscii("\nendstream\nendobj\n")
         }

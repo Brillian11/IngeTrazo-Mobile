@@ -3,4 +3,10 @@
     <cache-path
         name="exports"
         path="exports/" />
+    <cache-path
+        name="ar_media"
+        path="ar_media/" />
+    <external-files-path
+        name="ar_captures"
+        path="." />
 </paths>
