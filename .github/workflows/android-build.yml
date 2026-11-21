@@ -11,9 +11,6 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build-apk:
     name: Assemble & Release IngeTrazo Mobile APK
@@ -21,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           lfs: false
@@ -87,7 +84,7 @@ jobs:
           fi
 
       - name: Setup Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.3.1'
 
@@ -133,7 +130,7 @@ jobs:
           } > RELEASE_NOTES.md
 
       - name: Upload APK to GitHub Actions Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: IngeTrazo-Mobile-beta-0.1-APK
           path: app/build/outputs/apk/debug/IngeTrazo-Mobile-beta-0.1.apk
@@ -141,7 +138,7 @@ jobs:
 
       - name: Publish APK & Changelog to GitHub Releases Page
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.prep_release.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
